@@ -1,0 +1,796 @@
+#!/usr/bin/env perl
+
+use strict;
+use warnings;
+use Git::Repository;
+use Data::Dumper;
+use Cwd;
+use Getopt::Long;
+use POSIX;
+use Term::ReadKey;
+
+
+# debug stuff
+my $DEBUG_NONE  = 0;
+my $DEBUG_LOW   = 1;
+my $DEBUG_MED   = 2;
+my $DEBUG_HIGH  = 3;
+my $DEBUG       = $DEBUG_NONE;
+
+
+# defined issue types
+my $ISSUE_TYPE_TASK     = 0;
+my $ISSUE_TYPE_BUG      = 1;
+my $ISSUE_TYPE_DEFAULT  = $ISSUE_TYPE_TASK;
+# no duplicated issues here and no gaps between the issues!!!
+my %ISSUE_TYPES = ( $ISSUE_TYPE_TASK    => "Task",
+                    $ISSUE_TYPE_BUG     => "Bug",
+                  );
+my $ISSUE_TYPES_LENGTH = 4+2;       # means length("[Task]") = 4+2
+
+
+# define states
+my %ISSUE_STATES = ( "open"   => "open",
+                     "closed" => "closed",
+                   );
+my $ISSUE_STATES_LENGTH = 6+2;      # means length("[closed]") = 6+2
+
+# some necessary variables
+my $repo     = Git::Repository->new();
+my $cmd      = shift(@ARGV);
+
+
+# some possibly necessary variables (because of performance only filled when needed!)
+my $mainPath          = "";         # git repository main path (where .git can be found)
+my $foolPath          = "";         # $mainPath/.fool
+my $userPath          = "";         # $mainPath/.fool/<user>
+
+my $userLatestFile    = "";         # $mainPath/.fool/<user>/latest
+my $userMilestoneFile = "";         # $mainPath/.fool/<user>/milestone
+my $issuesFile        = "";         # $mainPath/.fool/issues
+
+my $checkout          = "";         # current checkout
+
+my $username          = "";         # user.name
+my $email             = "";         # user.email
+my $editor            = "";         # core.editor
+
+
+my %cmd = ("init"      => \&initCmd,           # $cmd{"init"}->(...)
+           "new"       => \&newCmd,
+           "ls"        => \&lsCmd,
+           "show"      => \&showCmd,
+           "edit"      => \&editCmd,
+           "cp"        => \&cpCmd,
+           "close"     => \&closeCmd,
+           "reopen"    => \&reopenCmd,
+           "rm"        => \&rmCmd,
+           "milestone" => \&milestoneCmd,
+           "help"      => \&helpCmd,
+           "dummy"     => \&dummyCmd,
+          );
+
+
+# define file names
+my $FILE_NAME_CURRENT_ISSUE = 0;
+my $FILE_NAME_ISSUES        = 1;
+my $FILE_NAME_MILESTONE     = 2;
+my $FILE_NAME_LATEST        = 3;
+my $FILE_NAME_TEMP          = 4;
+my %FILE_NAMES = ( $FILE_NAME_CURRENT_ISSUE => "",
+                   $FILE_NAME_ISSUES        => ".issues",
+                   $FILE_NAME_MILESTONE     => ".milestone",
+                   $FILE_NAME_LATEST        => ".latest",
+                   $FILE_NAME_TEMP          => ".temp",
+                  );
+
+
+
+################################################
+############## helper functions ###################
+################################################
+# for a short periode of time CTRL+C should be disabled! @todo
+#$SIG{INT} = \&mySIGINT;
+
+
+sub mySIGINT() {
+    printf("CTRL+C not allowed at the moment\n");
+    $SIG{INT} = \&mySIGINT;
+}
+
+
+# debug outputs
+sub DEBUG($$) {
+    my ($level, $message) = @_;
+    if ($DEBUG >= $level) {
+        printf("DEBUG[$level]: $message\n");
+    }
+}
+
+
+# extended exit function
+sub EXIT($;$) {
+    DEBUG($DEBUG_MED, "EXIT()");
+    my ($exitCode, $message) = @_;
+    
+    if (defined($message)) {
+        if ($exitCode) {
+            printf("error: ");
+        }
+        printf("$message\n\n");
+    }
+    exit($exitCode);
+}
+
+
+# read user.name from git config
+sub prepareUserName($) {
+    DEBUG($DEBUG_MED, "prepareUserName()");
+    my ($errorHandling) = @_;
+
+    # only if $username is not yet set because of performance reaseons!    
+    if (!$username) {
+        $username = $repo->run("config" => "user.name");
+        if (!$username && $errorHandling) {
+            EXIT(255, "user.name not set in git!");
+        }
+    }
+}
+
+
+# read user.email from git config
+sub prepareEmail($) {
+    DEBUG($DEBUG_MED, "prepareEmail()");
+    my ($errorHandling) = @_;
+
+    # only if $email is not yet set because of performance reaseons!    
+    if (!$email) {
+        $email    = $repo->run("config" => "user.email");
+        if (!$email && $errorHandling) {
+            EXIT(255, "user.email not set in git!");
+        }
+    }
+}
+
+
+# read core.editor from git config (environments, e.g. GIT_EDITOR will be ignored!)
+sub prepareEditor() {
+    DEBUG($DEBUG_MED, "prepareEditor()");
+
+    # only if $editor is not yet set because of performance reaseons!    
+    if (!$editor) {
+        $editor   = $repo->run("config" => "core.editor");
+        if (!$editor) {
+            $editor = "vi";
+        }
+    }
+}
+
+
+# read current checkout
+sub prepareCheckout($) {
+    DEBUG($DEBUG_MED, "prepareCheckout()");
+    my ($errorHandling) = @_;
+    $checkout = $repo->run("rev-parse" => "HEAD");
+    if (!$checkout && $errorHandling) {
+        EXIT(255, "need valid HEAD!");
+    }
+}
+
+
+# create name for current issue file
+sub xgetCurrentIssueFileName($$) {
+    DEBUG($DEBUG_MED, "getCurrentIssueFileName()");
+    my ($path, $latestValue) = @_;
+
+    if (!$username) {
+    
+    }
+
+    if (!$email) {
+        
+    }
+
+    my $fileName = ".".join("_", ($latestValue, $username, $email));
+
+    return ($path."/".$fileName, $fileName);
+}
+
+
+# create .fool/.issues file name
+sub xgetIssuesFileName($) {
+    DEBUG($DEBUG_MED, "getIssuesFileName()");
+    my ($path) = @_;
+    
+    return $path."/.issues";
+}
+
+
+# create .fool/<user>/.latest file name
+sub xgetLatestFileName($) {
+    DEBUG($DEBUG_MED, "getLatestFileName()");
+    my ($path) = @_;
+    
+    return $path."/.latest";
+}
+
+
+# create .fool/<user>/.milestone file name
+sub xgetMilestoneFileName($) {
+    DEBUG($DEBUG_MED, "getMilestoneFileName()");
+    my ($path) = @_;
+    
+    return $path."/.milestone";
+}
+
+
+# create .fool/<user>/.temp file name
+sub xgetTempFileName($) {
+    DEBUG($DEBUG_MED, "getTempFileName()");
+    my ($path) = @_;
+    
+    return $path."/.temp";
+}
+
+
+# build git-fool system file name
+sub getFileName($;@) {
+    DEBUG($DEBUG_MED, "getFileName()");
+    
+    my ($fileType, @parameters) = @_;
+    
+    # expects getFileName(FILE_NAME_CURRENT_ISSUE, <path>, <latest issue value>)
+    if ($fileType == $FILE_NAME_CURRENT_ISSUE) {
+        if (scalar(@parameters) != 2) {
+            EXIT(254, "internal error - wrong amount of parameters: $fileType");
+        }
+        my ($path, $latestValue) = @parameters;
+        prepareUserName(1);
+        prepareEmail(1);
+        
+        my $fileName = ".".join("_", ($latestValue, $username, $email));
+
+        return ($fileName, $path."/".$fileName);
+    }
+    else {
+        if (scalar(@parameters) != 1) {
+            EXIT(254, "internal error - wrong amount of parameters: $fileType");
+        }
+
+        my ($path) = @parameters;
+        
+        if (!$FILE_NAMES{$fileType}) {
+            EXIT(254, "internal error - requested file type doesn't exist: $fileType");
+        }
+        my $fileName = $FILE_NAMES{$fileType};
+
+        return ($fileName, $path."/".$fileName);
+    }
+}
+
+# find main directory that contains ".git" and if initialization is already done also ".fool"
+sub findRepoMainDir() {
+    DEBUG($DEBUG_MED, "findRepoMainDir()");
+    $mainPath = cwd();
+    while (!(-d $mainPath."/.git")) {
+        $mainPath = substr($mainPath, 0, rindex($mainPath, '/'));
+        if (!$mainPath) {
+            EXIT(255, "not inside a git repository!");
+        }
+    }
+}
+
+
+# fill $foolPath, $issuesFile and $userMilestoneFile variables
+sub findFoolDir() {
+    DEBUG($DEBUG_MED, "findFoolDir()");
+
+    # get repo main path if not already set
+    if (!$mainPath) {
+        findRepoMainDir();
+    }
+
+    $foolPath   = $mainPath."/.fool";
+    $issuesFile = getFileName($FILE_NAME_ISSUES, $foolPath);
+}
+
+
+# fill $userPath, $userLatestFile and $userMilestoneFile variables
+sub findUserDir() {
+    DEBUG($DEBUG_MED, "findUserDir()");
+
+    prepareUserName(1);
+
+    # get fool path if not already set
+    if (!$foolPath) {
+        findFoolDir();
+    }
+
+    $userPath          = $foolPath."/$username";
+    $userLatestFile    = getFileName($FILE_NAME_LATEST,    $userPath);
+    $userMilestoneFile = getFileName($FILE_NAME_MILESTONE, $userPath);
+}
+
+
+# test if .fool directory exists
+sub testFoolDir() {
+    DEBUG($DEBUG_MED, "testFoolDir()");
+
+    if (!$foolPath) {
+        findFoolDir();
+    }
+
+    if (!(-d $foolPath) || !(-e $issuesFile)) {
+        EXIT(255, "git-fool seems not to be initialized, run 'git-fool init'!");
+    }
+}
+
+
+# test if .fool directory exists
+sub testUserDir() {
+    DEBUG($DEBUG_MED, "testUserDir()");
+
+    if (!$userPath) {
+        findUserDir();
+    }
+
+    if (!(-d $userPath) || !(-e $userLatestFile) || !(-e $userMilestoneFile)) {
+        EXIT(255, "git-fool user path not initialized, run 'git-fool new'!");
+    }
+}
+
+
+# prepare .fool directory
+sub prepareFoolDir() {
+    DEBUG($DEBUG_MED, "prepareFoolDir()");
+
+    # find main directory of current repository and set $foolPath variable
+    findFoolDir();
+    
+    # create .fool path if not exists
+    if (!(-d $foolPath)) {
+        mkdir($foolPath) || EXIT(255, "cannot create directory $foolPath: $!");
+    }
+
+    # create .fool/issues file if not exists
+    if (!(-e getFileName($FILE_NAME_ISSUES, $foolPath))) {
+        system("touch ".getFileName($FILE_NAME_ISSUES, $foolPath));
+    }
+}
+
+
+# prepare .fool/<user> directory
+sub prepareUserDir() {
+    DEBUG($DEBUG_MED, "prepareUserDir()");
+
+    # find user directory
+    findUserDir();
+
+    # create user directory if not exists
+    if (!(-d $userPath)) {
+        mkdir($userPath) || EXIT(255, "cannot create directory $userPath: $!");;
+    }
+
+    # create .fool/<user>/latest if doesn't exist and fill it with 0 otherwise let it untouched
+    if (!(-e $userLatestFile)) {
+        system("echo -n 0 > $userLatestFile");
+    }
+
+    # create .fool/<user>/milestone file if not exists
+    if (!(-e $userMilestoneFile)) {
+        system("echo -n 0.1 > $userMilestoneFile");
+    }
+}
+
+
+# create a new issue with given values and update .fool/<user>/.latest file
+sub createNewIssue($$$$;$) {
+    DEBUG($DEBUG_MED, "createNewIssue()");
+
+    my ($latestValue, $issueType, $milestone, $title, $commentFile) = @_;
+
+    if (!$email) {
+        prepareEmail(1);
+    }
+    if (!$username) {
+        prepareUserName(1);
+    }
+    if (!$checkout) {
+        prepareCheckout(1);
+    }
+
+    my %tagHash = ();
+    my $comment = "0";
+    if ($commentFile && -s $commentFile) {
+        $comment = "1";
+        
+        %tagHash = readTaggedFile($commentFile);
+        system("rm $commentFile");
+    }
+
+    # create comment/history file
+    if (!$tagHash{"[HISTORY]"}) {
+        $tagHash{"[HISTORY]"} = [];
+    }
+
+    # now write current issue file (with comments and HISTORY)
+    push(@{$tagHash{"[HISTORY]"}}, "created: ".strftime("%Z, %a %b %e %H:%M:%S %Y", localtime())." at $checkout");
+    my ($currentIssueFileName, $currentIssueFile) = getFileName($FILE_NAME_CURRENT_ISSUE, $foolPath, $latestValue);
+    writeTaggedFile($currentIssueFile, \%tagHash);
+
+    # user info
+    printf("created issue ".$currentIssueFileName);
+
+    # write issue into issues file
+    system("echo \"$latestValue/$username/$email/$issueType/open/$milestone/$title/$comment\" >> $issuesFile");
+    
+    # update .fool/<user>/.latest file
+    system("echo -n $latestValue > $userLatestFile");
+}
+
+
+# reads a string file into an array
+sub readFile($) {
+    DEBUG($DEBUG_MED, "readFile()");
+    my ($fileName) = @_;
+    
+    my @fileContent = ();
+    
+    if (-e $fileName) {
+        my $FH;
+        open($FH, "<", $fileName) || EXIT(255, "cannot open $fileName: $!");
+        while (<$FH>) {
+            chomp($_);
+            push(@fileContent, $_);
+        }
+        close($FH);    
+    }
+    
+    return @fileContent;
+}
+
+
+# writes a given tag hash to a file (first writes optional leading tagless sections followed by optional tagged sections, tag means [<tag>])
+sub writeTaggedFile($\$) {
+    DEBUG($DEBUG_MED, "writeTaggedFile()");
+    my ($fileName, $fileContentRef) = @_;
+
+    # sub function for writing single body sections to prefent code duplication!
+    my $subFunction = sub {
+        my ($FH, $linesRef) = @_;
+        
+        my $lastLine = "";
+        
+        # now write all lines from current section
+        foreach my $line (@{$linesRef}) {
+            print($FH $line."\n");
+            $lastLine = $line;
+        }
+        
+        # ensure to have at least one empty line between sections
+        if ($lastLine) {
+            print($FH "\n");
+        }
+    };
+
+    my $FH;
+    open($FH, ">", $fileName) || EXIT(255, "cannot open $fileName: $!");
+
+    # print tagless section (only body without any tag) at the beginning        
+    if (${$fileContentRef}{"none"}) {
+        $subFunction->($FH, ${$fileContentRef}{"none"});
+        delete(${$fileContentRef}{"none"});
+    }
+
+    # now print all other sections
+    foreach my $key (sort(keys(%{$fileContentRef}))) {
+        # print section tag
+        print($FH $key."\n");
+        my $lastLine = "";
+
+        # print section body
+        $subFunction->($FH, ${$fileContentRef}{$key});
+    }
+
+    close($FH);
+}
+
+
+# read whole tagged string file (means file with an optional leading tagless sections followed by optional tagged sections, tag means [<tag>])
+sub readTaggedFile($) {
+    my ($fileName) = @_;
+    
+    my @lines = readFile($fileName);
+    
+    my %tagContent = ("none" => []);
+
+    my $currenTag = "none";
+    foreach my $line (@lines) {
+        chomp($line);
+
+        # tag line found?
+        if ($line =~ /^\[([^]]+)\]$/) {
+            $currenTag = $1;
+            $tagContent{$currenTag} = [];           # create new tag entry in tag hash
+            next;                                   # line handled take next one
+        }
+
+        push(@{$tagContent{$currenTag}}, $line);    # if not a tag line push it into current tag content array
+    }
+
+    return %tagContent;
+}
+
+
+#
+sub shortenString($$) {
+    my ($string, $size) = @_;
+    
+    if (length($string) > $size) {
+        $string = substr($string, 0, $size-3)."...";
+    }
+    
+    return $string;
+}
+
+################################################
+############## fool commands ###################
+################################################
+
+
+# initialize git repository for git-fool (.fool folder will be created)
+sub initCmd() {
+    DEBUG($DEBUG_LOW, "initCmd()");
+
+    # prepare fool dir if necessary
+    prepareFoolDir();
+}
+
+
+# create new issue
+sub newCmd() {  # new [-c|-p] <title>
+    DEBUG($DEBUG_LOW, "newCmd()");
+    my @arguments = @_;
+
+    # check command arguments
+    if (scalar(@arguments) < 1 || (scalar(@arguments) == 1 && ($arguments[0] eq "-c" || $arguments[0] eq "-p"))) {
+        $cmd{"help"}->("'git-fool new' parameter mismatch", 255);
+    }
+
+    testFoolDir();      # check if .fool directory exists (if not init hasn't be called yet!)
+    prepareUserDir();   # may be we have to create the user directory if this is the first time current user calls 'new' command
+
+    # reading latest issue value from file (file contains only this one line!)
+    my $userLatestValue = (readFile($userLatestFile))[0];
+
+    if ($userLatestValue !~ /^[0-9]+$/) {
+        EXIT(255, "$userLatestFile contains invalid value: $userLatestValue");
+    }
+    $userLatestValue++; # increment for current issue
+
+    # reading milestone value from file (file contains only this one line!)
+    my $userMilestone = (readFile($userMilestoneFile))[0];
+
+    if (!$userMilestone) {
+        EXIT(255, "$userMilestoneFile contains invalid value: $userMilestone");
+    }
+
+    my $tempFile  = "";
+    my $issueType = $ISSUE_TYPE_DEFAULT;
+
+    if ($arguments[0] eq "-c" || $arguments[0] eq "-p") {
+        # reading milestrom from user input
+        printf("Milestone [$userMilestone]: ");     # pressing just [ENTER] doesn't change default milestone
+        my $newUserMilestone = <STDIN>;   # read new milestone
+        chomp($newUserMilestone);
+        if ($newUserMilestone) {
+            $userMilestone = $newUserMilestone;
+        }
+
+        # reading issue type from user input
+        printf("issue type: ");
+        my $counter = 1;
+        foreach my $issue (sort(keys(%ISSUE_TYPES))) {
+            printf("$issue-$ISSUE_TYPES{$issue}");
+            if ($counter++ < scalar(keys(%ISSUE_TYPES))) {
+                printf(", ");
+            }
+            else {
+                printf(" [$issueType]: ");  # print default option if user presses just [ENTER]
+            }
+        }
+        my $newIssueType = <STDIN>;
+        chomp($newIssueType);
+        if ($newIssueType =~ /^[0-9]+$/ && $newIssueType >= 0 && $newIssueType < scalar(keys(%ISSUE_TYPES))) {
+            $issueType = $newIssueType;
+        }
+
+        if ($arguments[0] eq "-c") {
+            prepareEditor();
+            $tempFile = getFileName($FILE_NAME_TEMP, $userPath);
+            system("echo -n > $tempFile");      # ensure that .fool/<user>/.temp exists and is empty!
+            system("$editor $tempFile");        # open editor to edit temp file
+        }
+
+        shift(@arguments);      # remove cmd from arguments list because rest is the issue title
+    }
+    
+    createNewIssue($userLatestValue, $ISSUE_TYPES{$issueType}, $userMilestone, join(" ", @arguments), $tempFile);
+}
+
+
+# create new issue
+sub lsCmd() {   # ls [-l] [<pattern>]
+    DEBUG($DEBUG_LOW, "lsCmd()");
+    my @arguments = @_;
+
+    my $long = 0;
+
+    # check command arguments
+    if (@arguments && $arguments[0] eq "-l") {
+        $long = 1;
+        shift(@arguments);
+    }
+
+    # test if init has already be done
+    testFoolDir();
+
+    # read issues file
+    my @issuesFileContent = readFile($issuesFile);
+
+    my ($wchar, $hchar, $wpixels, $hpixels) = GetTerminalSize();
+
+    my $milestoneLength   = 9;
+    my $idLength          = 6;
+    my $userNameLength    = 10;
+    my $defaultTileLength = 35;
+    my $maxTitleLength  = $wchar - 50; # depends on window size
+    if ($maxTitleLength < 10) {
+        $maxTitleLength = $defaultTileLength;
+    }
+    
+    printf("#%-".$idLength."s %-".$userNameLength."s %-".$maxTitleLength."s %-".$ISSUE_TYPES_LENGTH."s %-".$ISSUE_STATES_LENGTH."s %s\n", "ISSUE", "USERNAME", "TITLE", "TYPE", "STATE", "MILESTONE");
+    printf(("-" x (45+$maxTitleLength))."\n");
+    foreach my $line (@issuesFileContent) {
+        my $patternFound = 0;
+        if (@arguments) {
+            foreach my $pattern (@arguments) {
+                if ($line =~ /$pattern/) {
+                    $patternFound = 1;
+                    last;
+                }
+            }
+            next unless ($patternFound);    # nothing found? continue with next line...
+        }
+
+        # handle line
+        if ($line =~ /([^\/]+)\/([^\/]+)\/([^\/]+)\/([^\/]+)\/([^\/]+)\/([^\/]+)\/([^\/]+)\/(.+)/) {
+            # process with line elements
+            my ($id, $userName, $email, $type, $state, $milestone, $title, $commentFile) = ($1, $2, $3, $4, $5, $6, $7, $8);
+            # do some screen formattings
+            my $userNameText  =      shortenString($userName,           $userNameLength);
+            my $titleText     = "\"".shortenString($title,              $maxTitleLength-2)     ."\"";      # -2 because of the quotation marks "<text>"
+            my $typeText      = "[". shortenString($type,               $ISSUE_TYPES_LENGTH-2) ."]";       # -2 because of the brackets [<type>]
+            my $stateText     = "[". shortenString($state,              $ISSUE_STATES_LENGTH-2)."]";       # -2 because of the brackets [<state>]
+            my $milestoneText = "[". shortenString($milestone,          $milestoneLength-2)    ."]";       # -2 because of the brackets [<MLST>]
+            # now print the stuff
+            printf("#%0".$idLength."d %-".$userNameLength."s %-".$maxTitleLength."s %-".$ISSUE_TYPES_LENGTH."s %-".$ISSUE_STATES_LENGTH."s %s\n", $id, $userNameText, $titleText, $typeText, $stateText, $milestoneText);
+        }
+        else {
+            EXIT(255, "found damaged line in issue file: [$line]");
+        }
+    }
+}
+
+
+# create new issue
+sub showCmd() { # show <issue>
+    DEBUG($DEBUG_LOW, "showCmd()");
+}
+
+
+# create new issue
+sub editCmd() { # edit <issue>
+    DEBUG($DEBUG_LOW, "editCmd()");
+}
+
+
+# create new issue
+sub cpCmd() {   # cp <issue>
+    DEBUG($DEBUG_LOW, "cpCmd()");
+}
+
+
+# create new issue
+sub closeCmd() {    # close <issue>
+    DEBUG($DEBUG_LOW, "closeCmd()");
+}
+
+
+# create new issue
+sub reopenCmd() {   # open <issue>
+    DEBUG($DEBUG_LOW, "reopenCmd()");
+}
+
+
+# create new issue
+sub rmCmd() {   # rm <issue>
+    DEBUG($DEBUG_LOW, "rmCmd()");
+}
+
+
+# create new issue
+sub milestone() {   # milestone [[-u] <text>]
+    DEBUG($DEBUG_LOW, "milestone()");
+}
+
+
+# print help screen
+sub helpCmd() { # help
+    DEBUG($DEBUG_LOW, "helpCmd()");
+    my ($error, $exitCode) = @_;
+    
+    if (defined($error)) {
+        printf("error: $error\n\n");
+    }
+
+    printf("git-fool v0.1 (c) Manfred Hauser / git\@74th.de under the terms of GPL v3.0 or newer\n\n".
+           "Usage: git-fool <command> [option(s)]\n".
+           "Commands:\n".
+           "  init                         initialize git-fool within current git repository\n".
+           "  new [-c|-p] <title>          create new issue (give -c(omment and parameters)\n".
+           "                               or -p(parameters only)), title mustn't contain any slashes!\n".
+           "  ls [-l] [<patterns>]         list all issues fulfilling given pattern (-l(ong))\n".
+           "  show <issue>                 show given issue\n".
+           "  edit <issue>                 edit given issue\n".
+           "  cp <issue>                   copies given issue and starts editing\n".
+           "  close <issue>                set given issue to close\n".
+           "  open <issue>                 reopen given issue\n".
+           "  rm <issue>                   remove given issue from disk\n".
+           "  milestone                    show current milestone\n".
+           "  milestone [-u <old>] <mlst>  set new current milestone\n".
+           "                               (-u(pdate) all open <old> MLSTs to <mlst>)\n".
+           "  help                         show this help screen\n".
+           "Settings (within git):\n".
+           "  mandatory:\n".
+           "    user.name                  developers name\n".
+           "    user.email                 developers email\n".
+           "  optional:\n".
+           "    core.editor                for issue comment (default is 'vi')\n\n");
+
+    if ($exitCode) {
+        EXIT($exitCode);
+    }
+}
+
+
+# just for testing...
+sub dummyCmd() {
+    DEBUG($DEBUG_MED, "dummyCmd()");
+
+
+}
+
+
+
+
+
+
+#########################################
+############## main() ###################
+#########################################
+if (!defined($cmd)) {
+    $cmd = "";
+}
+if ($cmd{$cmd}) {
+    DEBUG($DEBUG_LOW, "valid command given");
+    $cmd{$cmd}->(@ARGV);
+}
+else {
+    DEBUG($DEBUG_LOW, "given command [$cmd] invalid");
+    $cmd{"help"}->("missing or unknown command", 255);
+}
+
+
+1;
+
