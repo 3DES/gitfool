@@ -91,11 +91,27 @@ my %FILE_NAMES = ( $FILE_NAME_ISSUES            =>    "issues",
 ################################################
 # for a short periode of time CTRL+C should be disabled! @todo
 #$SIG{INT} = \&mySIGINT;
-
-
 sub mySIGINT() {
     printf("CTRL+C not allowed at the moment\n");
     $SIG{INT} = \&mySIGINT;
+}
+
+
+# print string as hex
+sub printHex($) {
+    my ($string) = @_;
+    
+    for (my $i=0; $i<length($string); $i++) {
+        printf("%02X ", ord(substr($string, $i, 1)));
+    }
+    printf("\n");
+}
+
+
+# own chomp() version
+sub CHOMP(\$) {
+    my ($stringRef) = @_;
+    ${$stringRef} =~ s/[\x0A\x0D]+$//;
 }
 
 
@@ -217,11 +233,11 @@ sub getFileName($;@) {
         if (scalar(@parameters) != 1) {
             EXIT(254, "internal error - wrong amount of parameters: $fileType");
         }
-        my ($latestValue) = @parameters;
+        my ($issueValue) = @parameters;
         prepareUserName(1);
         prepareEmail(1);
 
-        my $fileName = ".".join("_", ($latestValue, $userName, $email));
+        my $fileName = ".".join("_", ($issueValue, $userName, $email));
         return ($fileName, $foolPath."/".$fileName);
     }
     elsif ($fileType == $FILE_NAME_USER) {
@@ -346,10 +362,59 @@ sub prepareUserDir() {
 }
 
 
+# creates a short issue tag from given parameters (issue value and user name)
+sub getShortIssueTag($$) {
+    my ($issueValue, $userName) = @_;
+    
+    return ($issueValue."/".$userName);
+}
+
+
+# create an issue tag from given parameter and current global value
+sub getCurrentShortIssueTag($) {
+    my ($issueValue) = @_;
+    
+    return getShortIssueTag($issueValue, $userName);
+}
+
+
+# creates an issue tag from given parameters (issue value, user name and email address)
+sub getIssueTag($$$) {
+    my ($issueValue, $userName, $email) = @_;
+    
+    return (getShortIssueTag($issueValue, $userName)."/".$email);
+}
+
+
+# create an issue tag from given parameter and current global values
+sub getCurrentIssueTag($) {
+    my ($issueValue) = @_;
+    
+    return getIssueTag($issueValue, $userName, $email);
+}
+
+
+# create user id from given parameters (user name and email address)
+sub getUserId($$) {
+    my ($userName, $email) = @_;
+    
+    return ($userName."/".$email);
+}
+
+
+# create user id from current user
+sub getCurrentUserId() {
+    prepareEmail(1);
+    prepareUserName(1);
+    
+    return getUserId($userName, $email);
+}
+
+
 # create a new issue with given values and update .fool/<user>/.latest file
 sub createNewIssue($$$$;$) {
     DEBUG($DEBUG_MED, "createNewIssue()");
-    my ($latestValue, $issueType, $milestone, $title, $commentFile) = @_;
+    my ($issueValue, $issueType, $milestone, $title, $commentFile) = @_;
 
     # prepare necessary strings
     prepareEmail(1);
@@ -369,15 +434,15 @@ sub createNewIssue($$$$;$) {
     }
 
     # now write current issue file (with comments and HISTORY)
-    push(@{$tagHash{"[HISTORY]"}}, "created: ".strftime("%Z, %a %b %e %H:%M:%S %Y", localtime())." at $checkout");
-    my ($currentIssueFileName, $currentIssueFile) = getFileName($FILE_NAME_CURRENT_ISSUE, $latestValue);
+    push(@{$tagHash{"[HISTORY]"}}, "created: ".strftime("UTC, %b %e %H:%M:%S %Y", gmtime())." -by- ".getUserId($userName, $email)." -at- $checkout");
+    my ($currentIssueFileName, $currentIssueFile) = getFileName($FILE_NAME_CURRENT_ISSUE, $issueValue);
     writeTaggedFile($currentIssueFile, \%tagHash);
 
     # user info
     printf("created issue ".$currentIssueFileName);
 
     # write issue into issues file
-    system("echo \"$latestValue/$userName/$email/$issueType/open/$milestone/$title\" >> $issuesFile");
+    system("echo \"".getCurrentIssueTag($issueValue)."/$issueType/open/$milestone/$title\" >> $issuesFile");
 
     # update .fool/<user>/<email> file
     my @userFileContent = readFile($userFile);
@@ -397,10 +462,13 @@ sub readFile($) {
         my $FH;
         open($FH, "<", $fileName) || EXIT(255, "cannot open $fileName: $!");
         while (<$FH>) {
-            chomp($_);
+            CHOMP($_);
             push(@fileContent, $_);
         }
         close($FH);
+    }
+    else {
+        printf("error: file $fileName doesn't exist!\n");   # if file doesn't exist show error message but don't stop processing otherwise whole issue tracking won't work anymore if one file is missing!
     }
 
     return @fileContent;
@@ -478,7 +546,7 @@ sub readTaggedFile($) {
 
     my $currenTag = "none";
     foreach my $line (@lines) {
-        chomp($line);
+        CHOMP($line);
 
         # tag line found?
         if ($line =~ /^\[([^]]+)\]$/) {
@@ -544,7 +612,7 @@ sub printIssue($$$) {
                 printf(("-" x (45+$maxTitleLength))."\n");
             }
 
-            printf("%-".($idLength+$userNameLength+1)."s %-".$maxTitleLength."s %-".$ISSUE_TYPES_LENGTH."s %-".$ISSUE_STATES_LENGTH."s %s\n", "".$id."\/".$userNamePrepared, $titlePrepared, $issueTypePrepared, $statePrepared, $milestonePrepared);
+            printf("%-".($idLength+$userNameLength+1)."s %-".$maxTitleLength."s %-".$ISSUE_TYPES_LENGTH."s %-".$ISSUE_STATES_LENGTH."s %s\n", getShortIssueTag($id, $userNamePrepared), $titlePrepared, $issueTypePrepared, $statePrepared, $milestonePrepared);
         }
         else {          # if -l parameter is given the issue line is printed uncut in any case
             # if this is not the first line to be printed print a ############### separator line
@@ -553,12 +621,11 @@ sub printIssue($$$) {
             }
 
             # now print header line
-            printf("Issue ....... %s\n".
-                   "Email ....... %s\n".
-                   "Title ....... %s\n".
-                   "Type ........ %s\n".
-                   "State ....... %s\n".
-                   "Milestone ... %s\n\n", "".$id."\/".$userName, $email, $title, $issueType, $state, $milestone);
+            printf("Issue     : %s\n".
+                   "Title     : %s\n".
+                   "Type      : %s\n".
+                   "State     : %s\n".
+                   "Milestone : %s\n\n", getIssueTag($id, $userName, $email), $title, $issueType, $state, $milestone);
 
             # now try to print the comment/HISTORY file
             my $currentIssueFile   = getFileName($FILE_NAME_CURRENT_ISSUE, $id);
@@ -605,13 +672,13 @@ sub newCmd() {  # new [-c|-p] <title>
 
     # reading latest issue value from file (file contains only this one line!)
     my @userFileContent = readFile($userFile);
-    my $userLatestValue = $userFileContent[0];
+    my $userIssueValue  = $userFileContent[0];
     my $userMilestone   = $userFileContent[1];
 
-    if ($userLatestValue !~ /^[0-9]+$/) {
+    if ($userIssueValue !~ /^[0-9]+$/) {
         EXIT(255, "$userFile contains invalid latest value!");
     }
-    $userLatestValue++; # increment for current issue
+    $userIssueValue++; # increment for current issue
 
     # reading milestone value from file (file contains only this one line!)
     if (!$userMilestone) {
@@ -625,7 +692,7 @@ sub newCmd() {  # new [-c|-p] <title>
         # reading milestrom from user input
         printf("Milestone [$userMilestone]: ");     # pressing just [ENTER] doesn't change default milestone
         my $newUserMilestone = <STDIN>;   # read new milestone
-        chomp($newUserMilestone);
+        CHOMP($newUserMilestone);
         if ($newUserMilestone) {
             $userMilestone = $newUserMilestone;
         }
@@ -643,7 +710,7 @@ sub newCmd() {  # new [-c|-p] <title>
             }
         }
         my $newIssueType = <STDIN>;
-        chomp($newIssueType);
+        CHOMP($newIssueType);
         if ($newIssueType =~ /^[0-9]+$/ && $newIssueType >= 0 && $newIssueType < scalar(keys(%ISSUE_TYPES))) {
             $issueType = $newIssueType;
         }
@@ -658,7 +725,7 @@ sub newCmd() {  # new [-c|-p] <title>
         shift(@arguments);      # remove cmd from arguments list because rest is the issue title
     }
 
-    createNewIssue($userLatestValue, $ISSUE_TYPES{$issueType}, $userMilestone, join(" ", @arguments), $tempFile);
+    createNewIssue($userIssueValue, $ISSUE_TYPES{$issueType}, $userMilestone, join(" ", @arguments), $tempFile);
 }
 
 
@@ -680,16 +747,20 @@ sub grepCmd() {   # grep [-l] [<pattern>]
 
     # read issues file
     my @issuesFileContent = readFile($issuesFile);
+    if (!@issuesFileContent) {
+        printf("issue file is empty!\n");
+        return;
+    }
 
     # now handle all issues' lines
     my $alreadyWritten = 0;
     foreach my $line (@issuesFileContent) {
         # if <patterns> are given we have to match...
-        my $patternFound = 0;
+        my $patternFound = 1;
         if (@arguments) {
             foreach my $pattern (@arguments) {
-                if ($line =~ /$pattern/) {
-                    $patternFound = 1;
+                if ($line !~ /$pattern/) {
+                    $patternFound = 0;
                     last;
                 }
             }
@@ -721,6 +792,10 @@ sub lsCmd() { # ls [<issue>]
 
     # read issues file
     my @issuesFileContent = readFile($issuesFile);
+    if (!@issuesFileContent) {
+        printf("issue file is empty!\n");
+        return;
+    }
 
     # search and if found handle issue
     foreach my $line (@issuesFileContent) {
@@ -784,7 +859,7 @@ sub editCmd() { # edit <issue>
         # reading milestrom from user input
         printf("Milestone [$milestone]: ");     # pressing just [ENTER] doesn't change default milestone
         my $newMilestone = <STDIN>;   # read new milestone
-        chomp($newMilestone);
+        CHOMP($newMilestone);
         if ($newMilestone) {
             $milestone = $newMilestone;
             $issueChanged = 1;
@@ -810,7 +885,7 @@ sub editCmd() { # edit <issue>
             }
         }
         my $newIssueType = <STDIN>;
-        chomp($newIssueType);
+        CHOMP($newIssueType);
         if ($newIssueType =~ /^[0-9]+$/ && $newIssueType >= 0 && $newIssueType < scalar(keys(%ISSUE_TYPES))) {
             $issueType = $newIssueType;
             $issueChanged = 1;
@@ -819,7 +894,7 @@ sub editCmd() { # edit <issue>
         # reading new title from user input
         printf("Title [$title]:\n");    # pressing just [ENTER] doesn't change original title
         my $newTitle = <STDIN>;         # read new title
-        chomp($newTitle);
+        CHOMP($newTitle);
         if ($newTitle) {
             $title = $newTitle;
             $issueChanged = 1;
@@ -850,14 +925,14 @@ sub editCmd() { # edit <issue>
 #    
 #    
 #    
-#        my ($currentIssueFileName, $currentIssueFile) = getFileName($FILE_NAME_CURRENT_ISSUE, $latestValue);
+#        my ($currentIssueFileName, $currentIssueFile) = getFileName($FILE_NAME_CURRENT_ISSUE, $issueValue);
 #        writeTaggedFile($currentIssueFile, \%tagHash);
 #    
 #    
 #    
 #        # write issue into issues file
-#        system("echo \"$latestValue/$userName/$email/$issueType/open/$milestone/$title\" >> $issuesFile");
-#
+#        system("echo \"".getCurrentIssueTag($issueValue)."/$issueType/open/$milestone/$title\" >> $issuesFile");
+#                                
 
 
 
@@ -923,11 +998,14 @@ sub helpCmd() { # help
            "  init                         initialize git-fool within current git repository\n".
            "  new [-c|-p] <title>          create new issue (give -c(omment and parameters)\n".
            "                               or -p(parameters only)), title mustn't contain any slashes!\n".
-           "  grep [-l] [<patterns>]       list all issues matching at least one given pattern (-l(ong))\n".
-           "                               comments are not grepped!\n".
+           "  grep [-l] [<patterns>]       list all issues matching all given patterns (-l(ong))\n".                    # @todo: sortierung noch einbauen... simpel=nur nach issue, aufwändig=mit sortierangabe, z.B. i=issue, it=issue/type, ism=issue/state/milestone
+           "                               without patterns all are shown\n".
+           "                               escape characters if necessary, e.g. the dot and sth.\n".
+           "                               it helps to use single quotation marks, e.g. '0\.3'\n".
+           "                               comments aren't grepped but email addresses!\n".
            "  ls [<issue>]                 show given issue (without issue it will act like 'git-fool grep')\n".
            "                               given issue will be used as prefix of entries in issue file\n".
-           "                               so it can be e.g. '1', '1/3D' and '1/3DES7git\@74th.de'\n".
+           "                               so it can be e.g. '1', '1/3D' and '1/3DES/git\@74th.de'\n".
            "  edit <issue>                 edit given 'open' issue\n".
            "  cp <issue>                   copies given issue and starts editing\n".
            "  close <issue>                set given issue to close\n".
