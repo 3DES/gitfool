@@ -87,7 +87,7 @@ my %FILE_NAMES = ( $FILE_NAME_CURRENT_ISSUE => "",
 
 
 ################################################
-############## helper functions ###################
+############## helper functions ################
 ################################################
 # for a short periode of time CTRL+C should be disabled! @todo
 #$SIG{INT} = \&mySIGINT;
@@ -112,7 +112,7 @@ sub DEBUG($$) {
 sub EXIT($;$) {
     DEBUG($DEBUG_MED, "EXIT()");
     my ($exitCode, $message) = @_;
-    
+
     if (defined($message)) {
         if ($exitCode) {
             printf("error: ");
@@ -128,7 +128,7 @@ sub prepareUserName($) {
     DEBUG($DEBUG_MED, "prepareUserName()");
     my ($errorHandling) = @_;
 
-    # only if $username is not yet set because of performance reaseons!    
+    # only if $username is not yet set because of performance reaseons!
     if (!$username) {
         $username = $repo->run("config" => "user.name");
         if (!$username && $errorHandling) {
@@ -143,7 +143,7 @@ sub prepareEmail($) {
     DEBUG($DEBUG_MED, "prepareEmail()");
     my ($errorHandling) = @_;
 
-    # only if $email is not yet set because of performance reaseons!    
+    # only if $email is not yet set because of performance reaseons!
     if (!$email) {
         $email    = $repo->run("config" => "user.email");
         if (!$email && $errorHandling) {
@@ -157,7 +157,7 @@ sub prepareEmail($) {
 sub prepareEditor() {
     DEBUG($DEBUG_MED, "prepareEditor()");
 
-    # only if $editor is not yet set because of performance reaseons!    
+    # only if $editor is not yet set because of performance reaseons!
     if (!$editor) {
         $editor   = $repo->run("config" => "core.editor");
         if (!$editor) {
@@ -171,9 +171,12 @@ sub prepareEditor() {
 sub prepareCheckout($) {
     DEBUG($DEBUG_MED, "prepareCheckout()");
     my ($errorHandling) = @_;
-    $checkout = $repo->run("rev-parse" => "HEAD");
-    if (!$checkout && $errorHandling) {
-        EXIT(255, "need valid HEAD!");
+    
+    if (!$checkout) {
+        $checkout = $repo->run("rev-parse" => "HEAD");
+        if (!$checkout && $errorHandling) {
+            EXIT(255, "need valid HEAD!");
+        }
     }
 }
 
@@ -184,11 +187,11 @@ sub xgetCurrentIssueFileName($$) {
     my ($path, $latestValue) = @_;
 
     if (!$username) {
-    
+
     }
 
     if (!$email) {
-        
+
     }
 
     my $fileName = ".".join("_", ($latestValue, $username, $email));
@@ -201,7 +204,7 @@ sub xgetCurrentIssueFileName($$) {
 sub xgetIssuesFileName($) {
     DEBUG($DEBUG_MED, "getIssuesFileName()");
     my ($path) = @_;
-    
+
     return $path."/.issues";
 }
 
@@ -210,7 +213,7 @@ sub xgetIssuesFileName($) {
 sub xgetLatestFileName($) {
     DEBUG($DEBUG_MED, "getLatestFileName()");
     my ($path) = @_;
-    
+
     return $path."/.latest";
 }
 
@@ -219,7 +222,7 @@ sub xgetLatestFileName($) {
 sub xgetMilestoneFileName($) {
     DEBUG($DEBUG_MED, "getMilestoneFileName()");
     my ($path) = @_;
-    
+
     return $path."/.milestone";
 }
 
@@ -228,7 +231,7 @@ sub xgetMilestoneFileName($) {
 sub xgetTempFileName($) {
     DEBUG($DEBUG_MED, "getTempFileName()");
     my ($path) = @_;
-    
+
     return $path."/.temp";
 }
 
@@ -236,9 +239,9 @@ sub xgetTempFileName($) {
 # build git-fool system file name
 sub getFileName($;@) {
     DEBUG($DEBUG_MED, "getFileName()");
-    
+
     my ($fileType, @parameters) = @_;
-    
+
     # expects getFileName(FILE_NAME_CURRENT_ISSUE, <path>, <latest issue value>)
     if ($fileType == $FILE_NAME_CURRENT_ISSUE) {
         if (scalar(@parameters) != 2) {
@@ -247,7 +250,7 @@ sub getFileName($;@) {
         my ($path, $latestValue) = @parameters;
         prepareUserName(1);
         prepareEmail(1);
-        
+
         my $fileName = ".".join("_", ($latestValue, $username, $email));
 
         return ($fileName, $path."/".$fileName);
@@ -258,7 +261,7 @@ sub getFileName($;@) {
         }
 
         my ($path) = @parameters;
-        
+
         if (!$FILE_NAMES{$fileType}) {
             EXIT(254, "internal error - requested file type doesn't exist: $fileType");
         }
@@ -346,7 +349,7 @@ sub prepareFoolDir() {
 
     # find main directory of current repository and set $foolPath variable
     findFoolDir();
-    
+
     # create .fool path if not exists
     if (!(-d $foolPath)) {
         mkdir($foolPath) || EXIT(255, "cannot create directory $foolPath: $!");
@@ -386,24 +389,16 @@ sub prepareUserDir() {
 # create a new issue with given values and update .fool/<user>/.latest file
 sub createNewIssue($$$$;$) {
     DEBUG($DEBUG_MED, "createNewIssue()");
-
     my ($latestValue, $issueType, $milestone, $title, $commentFile) = @_;
 
-    if (!$email) {
-        prepareEmail(1);
-    }
-    if (!$username) {
-        prepareUserName(1);
-    }
-    if (!$checkout) {
-        prepareCheckout(1);
-    }
+    # prepare necessary strings
+    prepareEmail(1);
+    prepareUserName(1);
+    prepareCheckout(1);
 
+    # if exists read comment file to be handled when comment/HISTORY file is written
     my %tagHash = ();
-    my $comment = "0";
     if ($commentFile && -s $commentFile) {
-        $comment = "1";
-        
         %tagHash = readTaggedFile($commentFile);
         system("rm $commentFile");
     }
@@ -422,8 +417,8 @@ sub createNewIssue($$$$;$) {
     printf("created issue ".$currentIssueFileName);
 
     # write issue into issues file
-    system("echo \"$latestValue/$username/$email/$issueType/open/$milestone/$title/$comment\" >> $issuesFile");
-    
+    system("echo \"$latestValue/$username/$email/$issueType/open/$milestone/$title\" >> $issuesFile");
+
     # update .fool/<user>/.latest file
     system("echo -n $latestValue > $userLatestFile");
 }
@@ -433,9 +428,9 @@ sub createNewIssue($$$$;$) {
 sub readFile($) {
     DEBUG($DEBUG_MED, "readFile()");
     my ($fileName) = @_;
-    
+
     my @fileContent = ();
-    
+
     if (-e $fileName) {
         my $FH;
         open($FH, "<", $fileName) || EXIT(255, "cannot open $fileName: $!");
@@ -443,12 +438,26 @@ sub readFile($) {
             chomp($_);
             push(@fileContent, $_);
         }
-        close($FH);    
+        close($FH);
     }
-    
+
     return @fileContent;
 }
 
+
+# writes content of a given array ref into a file
+sub writeFile($\$) {
+    DEBUG($DEBUG_MED, "writeFile()");
+    my ($fileName, $linesRef) = @_;
+
+    my $FH;
+    open($FH, ">", $fileName) || EXIT(255, "cannot open $fileName: $!");
+
+    foreach my $line (@{$linesRef}) {
+        print($FH $line);
+    }
+    close($FH);
+}
 
 # writes a given tag hash to a file (first writes optional leading tagless sections followed by optional tagged sections, tag means [<tag>])
 sub writeTaggedFile($\$) {
@@ -458,15 +467,15 @@ sub writeTaggedFile($\$) {
     # sub function for writing single body sections to prefent code duplication!
     my $subFunction = sub {
         my ($FH, $linesRef) = @_;
-        
+
         my $lastLine = "";
-        
+
         # now write all lines from current section
         foreach my $line (@{$linesRef}) {
             print($FH $line."\n");
             $lastLine = $line;
         }
-        
+
         # ensure to have at least one empty line between sections
         if ($lastLine) {
             print($FH "\n");
@@ -476,7 +485,7 @@ sub writeTaggedFile($\$) {
     my $FH;
     open($FH, ">", $fileName) || EXIT(255, "cannot open $fileName: $!");
 
-    # print tagless section (only body without any tag) at the beginning        
+    # print tagless section (only body without any tag) at the beginning
     if (${$fileContentRef}{"none"}) {
         $subFunction->($FH, ${$fileContentRef}{"none"});
         delete(${$fileContentRef}{"none"});
@@ -498,10 +507,11 @@ sub writeTaggedFile($\$) {
 
 # read whole tagged string file (means file with an optional leading tagless sections followed by optional tagged sections, tag means [<tag>])
 sub readTaggedFile($) {
+    DEBUG($DEBUG_MED, "readTaggedFile()");
     my ($fileName) = @_;
-    
+
     my @lines = readFile($fileName);
-    
+
     my %tagContent = ("none" => []);
 
     my $currenTag = "none";
@@ -522,16 +532,82 @@ sub readTaggedFile($) {
 }
 
 
-#
+# if given string is longer than given size string will be cut and an ellipse will be added
 sub shortenString($$) {
+    DEBUG($DEBUG_MED, "shortenString()");
     my ($string, $size) = @_;
-    
+
     if (length($string) > $size) {
         $string = substr($string, 0, $size-3)."...";
     }
-    
+
     return $string;
 }
+
+
+#
+sub printIssue($$$) {
+    DEBUG($DEBUG_MED, "printIssue()");
+    my ($line, $long, $alreadyWritten) = @_;
+
+    my ($wchar, $hchar, $wpixels, $hpixels) = GetTerminalSize();
+
+    # some variables to make later changes little bit easier!
+    my $milestoneLength   = 9;
+    my $idLength          = 6;
+    my $userNameLength    = 10;
+    my $defaultTileLength = 35;
+    my $maxTitleLength    = $wchar - 50; # depends on window size
+    if ($maxTitleLength < 10) {
+        $maxTitleLength = $defaultTileLength;   # if window is too small for printing the title ignore window size and print the whole title
+    }
+
+    # issue line has to be printed
+    if ($line =~ /^([^\/]+)\/([^\/]+)\/([^\/]+)\/([^\/]+)\/([^\/]+)\/([^\/]+)\/(.+)$/) {
+        # process with line elements
+        my ($id, $userName, $email, $type, $state, $milestone, $title) = ($1, $2, $3, $4, $5, $6, $7);
+
+        # do some string formattings (to shorten the output to screen width if not option -l is used!)
+        my $userNameText  =      shortenString($userName,           $userNameLength);
+        my $titleText     = "\"".shortenString($title,              $maxTitleLength-2)     ."\"";      # -2 because of the quotation marks "<text>"
+        my $typeText      = "[". shortenString($type,               $ISSUE_TYPES_LENGTH-2) ."]";       # -2 because of the brackets [<type>]
+        my $stateText     = "[". shortenString($state,              $ISSUE_STATES_LENGTH-2)."]";       # -2 because of the brackets [<state>]
+        my $milestoneText = "[". shortenString($milestone,          $milestoneLength-2)    ."]";       # -2 because of the brackets [<MLST>]
+
+        # now print the stuff
+        if (!$long) {   # print each issue into one line as long as the window is not too smal otherwise line will be printed uncut (see calculation of $maxTitleLength)
+            # if not -l print a header line
+            if (!$alreadyWritten) {
+                printf("#%-".$idLength."s %-".$userNameLength."s %-".$maxTitleLength."s %-".$ISSUE_TYPES_LENGTH."s %-".$ISSUE_STATES_LENGTH."s %s\n", "ISSUE", "USERNAME", "TITLE", "TYPE", "STATE", "MILESTONE");
+                printf(("-" x (45+$maxTitleLength))."\n");
+            }
+
+            printf("#%0".$idLength."d %-".$userNameLength."s %-".$maxTitleLength."s %-".$ISSUE_TYPES_LENGTH."s %-".$ISSUE_STATES_LENGTH."s %s\n", $id, $userNameText, $titleText, $typeText, $stateText, $milestoneText);
+        }
+        else {          # if -l parameter is given the issue line is printed uncut in any case
+            # if this is not the first line to be printed print a ############### separator line
+            if ($alreadyWritten) {
+                printf(("#" x (45+$maxTitleLength))."\n\n");
+            }
+
+            # now print header line
+            printf("#%0".$idLength."d %-".$userNameLength."s %-".$maxTitleLength."s %-".$ISSUE_TYPES_LENGTH."s %-".$ISSUE_STATES_LENGTH."s %s\n\n", $id, $userName, "\"".$title."\"", "[".$type."]", "[".$state."]", "[".$milestone."]");
+
+            # now try to print the comment/HISTORY file
+            my $currentIssueFile   = getFileName($FILE_NAME_CURRENT_ISSUE, $foolPath, $id);
+            my @commentHistoryFile = readFile($currentIssueFile);
+            foreach my $line (@commentHistoryFile) {
+                printf("$line\n");
+            }
+        }
+    }
+    else {
+        EXIT(255, "found damaged line in issue file: [$line]");
+    }
+}
+
+
+
 
 ################################################
 ############## fool commands ###################
@@ -554,7 +630,7 @@ sub newCmd() {  # new [-c|-p] <title>
 
     # check command arguments
     if (scalar(@arguments) < 1 || (scalar(@arguments) == 1 && ($arguments[0] eq "-c" || $arguments[0] eq "-p"))) {
-        $cmd{"help"}->("'git-fool new' parameter mismatch", 255);
+        $cmd{"help"}->("'git-fool new' parameters mismatch", 255);
     }
 
     testFoolDir();      # check if .fool directory exists (if not init hasn't be called yet!)
@@ -614,7 +690,7 @@ sub newCmd() {  # new [-c|-p] <title>
 
         shift(@arguments);      # remove cmd from arguments list because rest is the issue title
     }
-    
+
     createNewIssue($userLatestValue, $ISSUE_TYPES{$issueType}, $userMilestone, join(" ", @arguments), $tempFile);
 }
 
@@ -638,20 +714,10 @@ sub lsCmd() {   # ls [-l] [<pattern>]
     # read issues file
     my @issuesFileContent = readFile($issuesFile);
 
-    my ($wchar, $hchar, $wpixels, $hpixels) = GetTerminalSize();
-
-    my $milestoneLength   = 9;
-    my $idLength          = 6;
-    my $userNameLength    = 10;
-    my $defaultTileLength = 35;
-    my $maxTitleLength  = $wchar - 50; # depends on window size
-    if ($maxTitleLength < 10) {
-        $maxTitleLength = $defaultTileLength;
-    }
-    
-    printf("#%-".$idLength."s %-".$userNameLength."s %-".$maxTitleLength."s %-".$ISSUE_TYPES_LENGTH."s %-".$ISSUE_STATES_LENGTH."s %s\n", "ISSUE", "USERNAME", "TITLE", "TYPE", "STATE", "MILESTONE");
-    printf(("-" x (45+$maxTitleLength))."\n");
+    # now handle all issues' lines
+    my $alreadyWritten = 0;
     foreach my $line (@issuesFileContent) {
+        # if <patterns> are given we have to match...
         my $patternFound = 0;
         if (@arguments) {
             foreach my $pattern (@arguments) {
@@ -660,38 +726,188 @@ sub lsCmd() {   # ls [-l] [<pattern>]
                     last;
                 }
             }
-            next unless ($patternFound);    # nothing found? continue with next line...
+            next unless ($patternFound);    # if no pattern matched continue with next line...
         }
 
-        # handle line
-        if ($line =~ /([^\/]+)\/([^\/]+)\/([^\/]+)\/([^\/]+)\/([^\/]+)\/([^\/]+)\/([^\/]+)\/(.+)/) {
+        printIssue($line, $long, $alreadyWritten);
+        $alreadyWritten = 1;
+    }
+}
+
+
+# create new issue
+sub showCmd() { # show [-l] <issue>
+    DEBUG($DEBUG_LOW, "showCmd()");
+    my @arguments = @_;
+
+    my $long = 0;
+
+    # check command arguments
+    if (@arguments && $arguments[0] eq "-l") {
+        $long = 1;
+        shift(@arguments);
+    }
+    if (@arguments != 1 || $arguments[0] !~ /^[0-9]+$/) {
+        $cmd{"help"}->("'git-fool show' parameters mismatch", 255);
+    }
+
+    # test if init has already be done
+    testFoolDir();
+
+    # read issues file
+    my @issuesFileContent = readFile($issuesFile);
+
+    # search and if found handle issue
+    foreach my $line (@issuesFileContent) {
+        if ($line =~ /^([^\/]+)/) {
             # process with line elements
-            my ($id, $userName, $email, $type, $state, $milestone, $title, $commentFile) = ($1, $2, $3, $4, $5, $6, $7, $8);
-            # do some screen formattings
-            my $userNameText  =      shortenString($userName,           $userNameLength);
-            my $titleText     = "\"".shortenString($title,              $maxTitleLength-2)     ."\"";      # -2 because of the quotation marks "<text>"
-            my $typeText      = "[". shortenString($type,               $ISSUE_TYPES_LENGTH-2) ."]";       # -2 because of the brackets [<type>]
-            my $stateText     = "[". shortenString($state,              $ISSUE_STATES_LENGTH-2)."]";       # -2 because of the brackets [<state>]
-            my $milestoneText = "[". shortenString($milestone,          $milestoneLength-2)    ."]";       # -2 because of the brackets [<MLST>]
-            # now print the stuff
-            printf("#%0".$idLength."d %-".$userNameLength."s %-".$maxTitleLength."s %-".$ISSUE_TYPES_LENGTH."s %-".$ISSUE_STATES_LENGTH."s %s\n", $id, $userNameText, $titleText, $typeText, $stateText, $milestoneText);
-        }
-        else {
-            EXIT(255, "found damaged line in issue file: [$line]");
+            if ($1 == $arguments[0]) {
+                printIssue($line, $long, 0);
+                last;
+            }
         }
     }
 }
 
 
 # create new issue
-sub showCmd() { # show <issue>
-    DEBUG($DEBUG_LOW, "showCmd()");
-}
-
-
-# create new issue
 sub editCmd() { # edit <issue>
     DEBUG($DEBUG_LOW, "editCmd()");
+    my @arguments = @_;
+
+    # check command arguments
+    if (@arguments != 1 || $arguments[0] !~ /^[0-9]+$/) {
+        $cmd{"help"}->("'git-fool edit' parameters mismatch", 255);
+    }
+
+    # test if init has already be done
+    testFoolDir();
+
+    # read issues file
+    my @issuesFileContent = readFile($issuesFile);
+
+    # prepare necessary strings
+    prepareEmail(1);
+    prepareUserName(1);
+    prepareCheckout(1);
+
+    # search for given issue in .issue file
+    my $lineIndex;
+    for ($lineIndex = 0; $lineIndex<@issuesFileContent; $lineIndex++) {
+        if ($issuesFileContent[$lineIndex] =~ /^([^\/]+)/) {
+            # process with line elements
+            if ($1 == $arguments[0]) {
+                last;
+            }
+        }
+    }
+    if ($lineIndex == @issuesFileContent) {
+        EXIT(255, "given issue doesn't exist!");
+    }
+
+    printIssue($issuesFileContent[$lineIndex], 0, 0);
+    printf("\n");
+
+    # set to 1 if anything of the issue has been changed!
+    my $issueChanged = 0;
+
+    # now scan and handle line
+    my $line = $issuesFileContent[$lineIndex];
+    if ($line =~ /^([^\/]+)\/([^\/]+)\/([^\/]+)\/([^\/]+)\/([^\/]+)\/([^\/]+)\/(.+)$/) {
+        # process with line elements
+        my ($id, $userName, $email, $issueType, $state, $milestone, $title) = ($1, $2, $3, $4, $5, $6, $7);
+
+        # reading milestrom from user input
+        printf("Milestone [$milestone]: ");     # pressing just [ENTER] doesn't change default milestone
+        my $newMilestone = <STDIN>;   # read new milestone
+        chomp($newMilestone);
+        if ($newMilestone) {
+            $milestone = $newMilestone;
+            $issueChanged = 1;
+        }
+
+        # find issue type string and convert it into issue type value
+        while (my($key, $value) = each %ISSUE_TYPES) {
+            if ($value eq $issueType) {
+                $issueType = $key;
+                last;
+            }
+        }
+        # reading issue type from user input
+        printf("issue type: ");
+        my $counter = 1;
+        foreach my $issue (sort(keys(%ISSUE_TYPES))) {
+            printf("$issue-$ISSUE_TYPES{$issue}");
+            if ($counter++ < scalar(keys(%ISSUE_TYPES))) {
+                printf(", ");
+            }
+            else {
+                printf(" [$issueType]: ");  # print default option if user presses just [ENTER]
+            }
+        }
+        my $newIssueType = <STDIN>;
+        chomp($newIssueType);
+        if ($newIssueType =~ /^[0-9]+$/ && $newIssueType >= 0 && $newIssueType < scalar(keys(%ISSUE_TYPES))) {
+            $issueType = $newIssueType;
+            $issueChanged = 1;
+        }
+
+        # reading new title from user input
+        printf("Title [$title]:\n");    # pressing just [ENTER] doesn't change original title
+        my $newTitle = <STDIN>;         # read new title
+        chomp($newTitle);
+        if ($newTitle) {
+            $title = $newTitle;
+            $issueChanged = 1;
+        }
+
+        # read tagged file
+        my ($currentIssueFileName, $currentIssueFile) = getFileName($FILE_NAME_CURRENT_ISSUE, $foolPath, $arguments[0]);
+
+        print $currentIssueFile;
+
+
+
+#        my %tagHash = ();
+#        if ($commentFile && -s $commentFile) {
+#            %tagHash = readTaggedFile($commentFile);
+#            system("rm $commentFile");
+#        }
+#    
+#    
+#    
+#        my ($currentIssueFileName, $currentIssueFile) = getFileName($FILE_NAME_CURRENT_ISSUE, $foolPath, $latestValue);
+#        writeTaggedFile($currentIssueFile, \%tagHash);
+#    
+#    
+#    
+#        # write issue into issues file
+#        system("echo \"$latestValue/$username/$email/$issueType/open/$milestone/$title\" >> $issuesFile");
+#
+
+
+#        xxxxxxxxxxx
+#        readfile
+#        create temp file
+#        after change read temp file
+#        beide none sections vergleichen        -> $issueChanged = 1;
+#        beide files zusammenhängen
+#        file überschreiben
+
+
+
+#        prepareEditor();
+#        $tempFile = getFileName($FILE_NAME_TEMP, $userPath);
+#        system("echo -n > $tempFile");      # ensure that .fool/<user>/.temp exists and is empty!
+#        system("$editor $tempFile");        # open editor to edit temp file
+
+
+
+
+    }
+    else {
+        EXIT(255, "found damaged line in issue file: [$line]");
+    }
 }
 
 
@@ -729,7 +945,7 @@ sub milestone() {   # milestone [[-u] <text>]
 sub helpCmd() { # help
     DEBUG($DEBUG_LOW, "helpCmd()");
     my ($error, $exitCode) = @_;
-    
+
     if (defined($error)) {
         printf("error: $error\n\n");
     }
@@ -741,7 +957,7 @@ sub helpCmd() { # help
            "  new [-c|-p] <title>          create new issue (give -c(omment and parameters)\n".
            "                               or -p(parameters only)), title mustn't contain any slashes!\n".
            "  ls [-l] [<patterns>]         list all issues fulfilling given pattern (-l(ong))\n".
-           "  show <issue>                 show given issue\n".
+           "  show [-l] <issue>            show given issue (-l(ong))\n".
            "  edit <issue>                 edit given issue\n".
            "  cp <issue>                   copies given issue and starts editing\n".
            "  close <issue>                set given issue to close\n".
