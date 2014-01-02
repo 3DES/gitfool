@@ -8,6 +8,7 @@ use Cwd;
 use Getopt::Long;
 use POSIX;
 use Term::ReadKey;
+use File::Path;
 
 
 # debug stuff
@@ -35,31 +36,32 @@ my %ISSUE_STATES = ( "open"   => "open",
                    );
 my $ISSUE_STATES_LENGTH = 6+2;      # means length("[closed]") = 6+2
 
-# some necessary variables
+
+# some necessary global variables
 my $repo     = Git::Repository->new();
-my $cmd      = shift(@ARGV);
 
 
-# some possibly necessary variables (because of performance only filled when needed!)
+# some possibly necessary global variables (because of performance only filled when needed!)
 my $mainPath          = "";         # git repository main path (where .git can be found)
 my $foolPath          = "";         # $mainPath/.fool
-my $userPath          = "";         # $mainPath/.fool/<user>
+my $userPath          = "";         # $foolPath/<user>  (= $mainPath/.fool/<user>)
 
-my $userLatestFile    = "";         # $mainPath/.fool/<user>/latest
-my $userMilestoneFile = "";         # $mainPath/.fool/<user>/milestone
-my $issuesFile        = "";         # $mainPath/.fool/issues
+my $userFile          = "";         # $userPath/<email> (= $mainPath/.fool/<user>/<email>)
+my $issuesFile        = "";         # $foolPath/issues (= $mainPath/.fool/issues)
 
 my $checkout          = "";         # current checkout
 
-my $username          = "";         # user.name
+my $userName          = "";         # user.name
+my $shortUserName     = "";         # first two characters of user.name (necessary for files and directories but not for issue file entry!)
 my $email             = "";         # user.email
 my $editor            = "";         # core.editor
 
 
+# for cmd handling
 my %cmd = ("init"      => \&initCmd,           # $cmd{"init"}->(...)
            "new"       => \&newCmd,
+           "grep"      => \&grepCmd,
            "ls"        => \&lsCmd,
-           "show"      => \&showCmd,
            "edit"      => \&editCmd,
            "cp"        => \&cpCmd,
            "close"     => \&closeCmd,
@@ -72,16 +74,14 @@ my %cmd = ("init"      => \&initCmd,           # $cmd{"init"}->(...)
 
 
 # define file names
-my $FILE_NAME_CURRENT_ISSUE = 0;
-my $FILE_NAME_ISSUES        = 1;
-my $FILE_NAME_MILESTONE     = 2;
-my $FILE_NAME_LATEST        = 3;
-my $FILE_NAME_TEMP          = 4;
-my %FILE_NAMES = ( $FILE_NAME_CURRENT_ISSUE => "",
-                   $FILE_NAME_ISSUES        => ".issues",
-                   $FILE_NAME_MILESTONE     => ".milestone",
-                   $FILE_NAME_LATEST        => ".latest",
-                   $FILE_NAME_TEMP          => ".temp",
+my $FILE_NAME_ISSUES        = 0;
+my $FILE_NAME_TEMP          = 1;
+my $FILE_NAME_CURRENT_ISSUE = 2;
+my $FILE_NAME_USER          = 3;
+my %FILE_NAMES = ( $FILE_NAME_ISSUES            =>    "issues",
+                   $FILE_NAME_TEMP              =>    ".temp",
+                   $FILE_NAME_CURRENT_ISSUE     =>    "",              # to be created user name and email are necessary that are not known atm.
+                   $FILE_NAME_USER              =>    "",              # to be created user name and email are necessary that are not known atm.
                   );
 
 
@@ -128,11 +128,20 @@ sub prepareUserName($) {
     DEBUG($DEBUG_MED, "prepareUserName()");
     my ($errorHandling) = @_;
 
-    # only if $username is not yet set because of performance reaseons!
-    if (!$username) {
-        $username = $repo->run("config" => "user.name");
-        if (!$username && $errorHandling) {
+    # only if $userName is not yet set because of performance reaseons!
+    if (!$userName) {
+        $userName = $repo->run("config" => "user.name");
+        
+        # user.name must be set to make git fool working!
+        if (!$userName && $errorHandling) {
             EXIT(255, "user.name not set in git!");
+        }
+        $shortUserName = substr($userName, 0, 2);
+        
+        # if $shortUserName length is less than 2 $userName length is also less than two but two characters are our minimum so enlarge them!!!
+        if (length($shortUserName) < 2) {
+            $userName      .= "_";
+            $shortUserName .= "_";
         }
     }
 }
@@ -175,64 +184,9 @@ sub prepareCheckout($) {
     if (!$checkout) {
         $checkout = $repo->run("rev-parse" => "HEAD");
         if (!$checkout && $errorHandling) {
-            EXIT(255, "need valid HEAD!");
+            EXIT(255, "git-fool needs a valid checkout!");
         }
     }
-}
-
-
-# create name for current issue file
-sub xgetCurrentIssueFileName($$) {
-    DEBUG($DEBUG_MED, "getCurrentIssueFileName()");
-    my ($path, $latestValue) = @_;
-
-    if (!$username) {
-
-    }
-
-    if (!$email) {
-
-    }
-
-    my $fileName = ".".join("_", ($latestValue, $username, $email));
-
-    return ($path."/".$fileName, $fileName);
-}
-
-
-# create .fool/.issues file name
-sub xgetIssuesFileName($) {
-    DEBUG($DEBUG_MED, "getIssuesFileName()");
-    my ($path) = @_;
-
-    return $path."/.issues";
-}
-
-
-# create .fool/<user>/.latest file name
-sub xgetLatestFileName($) {
-    DEBUG($DEBUG_MED, "getLatestFileName()");
-    my ($path) = @_;
-
-    return $path."/.latest";
-}
-
-
-# create .fool/<user>/.milestone file name
-sub xgetMilestoneFileName($) {
-    DEBUG($DEBUG_MED, "getMilestoneFileName()");
-    my ($path) = @_;
-
-    return $path."/.milestone";
-}
-
-
-# create .fool/<user>/.temp file name
-sub xgetTempFileName($) {
-    DEBUG($DEBUG_MED, "getTempFileName()");
-    my ($path) = @_;
-
-    return $path."/.temp";
 }
 
 
@@ -242,32 +196,43 @@ sub getFileName($;@) {
 
     my ($fileType, @parameters) = @_;
 
-    # expects getFileName(FILE_NAME_CURRENT_ISSUE, <path>, <latest issue value>)
-    if ($fileType == $FILE_NAME_CURRENT_ISSUE) {
-        if (scalar(@parameters) != 2) {
+    # expects getFileName(FILE_NAME_CURRENT_ISSUE, <latest issue value>)
+    if ($fileType == $FILE_NAME_ISSUES) {
+        if (scalar(@parameters) != 0) {
             EXIT(254, "internal error - wrong amount of parameters: $fileType");
         }
-        my ($path, $latestValue) = @parameters;
-        prepareUserName(1);
-        prepareEmail(1);
 
-        my $fileName = ".".join("_", ($latestValue, $username, $email));
-
-        return ($fileName, $path."/".$fileName);
+        my $fileName = $FILE_NAMES{$fileType};
+        return ($fileName, $foolPath."/".$fileName);
     }
-    else {
+    elsif ($fileType == $FILE_NAME_TEMP) {
+        if (scalar(@parameters) != 0) {
+            EXIT(254, "internal error - wrong amount of parameters: $fileType");
+        }
+
+        my $fileName = $FILE_NAMES{$fileType};
+        return ($fileName, $userPath."/".$fileName);
+    }
+    elsif ($fileType == $FILE_NAME_CURRENT_ISSUE) {
         if (scalar(@parameters) != 1) {
             EXIT(254, "internal error - wrong amount of parameters: $fileType");
         }
+        my ($latestValue) = @parameters;
+        prepareUserName(1);
+        prepareEmail(1);
 
-        my ($path) = @parameters;
-
-        if (!$FILE_NAMES{$fileType}) {
-            EXIT(254, "internal error - requested file type doesn't exist: $fileType");
+        my $fileName = ".".join("_", ($latestValue, $userName, $email));
+        return ($fileName, $foolPath."/".$fileName);
+    }
+    elsif ($fileType == $FILE_NAME_USER) {
+        if (scalar(@parameters) != 0) {
+            EXIT(254, "internal error - wrong amount of parameters: $fileType");
         }
-        my $fileName = $FILE_NAMES{$fileType};
 
-        return ($fileName, $path."/".$fileName);
+        return ($email, $userPath."/".$email);
+    }
+    else {
+        EXIT(254, "internal error - not handled file type: $fileType");
     }
 }
 
@@ -284,8 +249,8 @@ sub findRepoMainDir() {
 }
 
 
-# fill $foolPath, $issuesFile and $userMilestoneFile variables
-sub findFoolDir() {
+# fill $foolPath and $issuesFile variables
+sub setFoolDir() {
     DEBUG($DEBUG_MED, "findFoolDir()");
 
     # get repo main path if not already set
@@ -294,24 +259,24 @@ sub findFoolDir() {
     }
 
     $foolPath   = $mainPath."/.fool";
-    $issuesFile = getFileName($FILE_NAME_ISSUES, $foolPath);
+    $issuesFile = getFileName($FILE_NAME_ISSUES);
 }
 
 
-# fill $userPath, $userLatestFile and $userMilestoneFile variables
-sub findUserDir() {
+# fill $userPath and $userFile variables
+sub setUserDir() {
     DEBUG($DEBUG_MED, "findUserDir()");
 
+    prepareEmail(1);
     prepareUserName(1);
 
     # get fool path if not already set
     if (!$foolPath) {
-        findFoolDir();
+        setFoolDir();
     }
 
-    $userPath          = $foolPath."/$username";
-    $userLatestFile    = getFileName($FILE_NAME_LATEST,    $userPath);
-    $userMilestoneFile = getFileName($FILE_NAME_MILESTONE, $userPath);
+    $userPath    = $foolPath."/".$shortUserName;
+    $userFile    = getFileName($FILE_NAME_USER);
 }
 
 
@@ -320,7 +285,7 @@ sub testFoolDir() {
     DEBUG($DEBUG_MED, "testFoolDir()");
 
     if (!$foolPath) {
-        findFoolDir();
+        setFoolDir();
     }
 
     if (!(-d $foolPath) || !(-e $issuesFile)) {
@@ -334,10 +299,10 @@ sub testUserDir() {
     DEBUG($DEBUG_MED, "testUserDir()");
 
     if (!$userPath) {
-        findUserDir();
+        setUserDir();
     }
 
-    if (!(-d $userPath) || !(-e $userLatestFile) || !(-e $userMilestoneFile)) {
+    if (!(-d $userPath) || !(-e $userFile)) {
         EXIT(255, "git-fool user path not initialized, run 'git-fool new'!");
     }
 }
@@ -348,7 +313,7 @@ sub prepareFoolDir() {
     DEBUG($DEBUG_MED, "prepareFoolDir()");
 
     # find main directory of current repository and set $foolPath variable
-    findFoolDir();
+    setFoolDir();
 
     # create .fool path if not exists
     if (!(-d $foolPath)) {
@@ -356,32 +321,27 @@ sub prepareFoolDir() {
     }
 
     # create .fool/issues file if not exists
-    if (!(-e getFileName($FILE_NAME_ISSUES, $foolPath))) {
-        system("touch ".getFileName($FILE_NAME_ISSUES, $foolPath));
+    if (!(-e getFileName($FILE_NAME_ISSUES))) {
+        system("touch ".getFileName($FILE_NAME_ISSUES));
     }
 }
 
 
-# prepare .fool/<user> directory
+# prepare .fool/<user> directory and .fool/<user>/<email> file
 sub prepareUserDir() {
     DEBUG($DEBUG_MED, "prepareUserDir()");
 
     # find user directory
-    findUserDir();
+    setUserDir();
 
     # create user directory if not exists
     if (!(-d $userPath)) {
-        mkdir($userPath) || EXIT(255, "cannot create directory $userPath: $!");;
+        mkpath($userPath) || EXIT(255, "cannot create directory $userPath: $!");;
     }
 
     # create .fool/<user>/latest if doesn't exist and fill it with 0 otherwise let it untouched
-    if (!(-e $userLatestFile)) {
-        system("echo -n 0 > $userLatestFile");
-    }
-
-    # create .fool/<user>/milestone file if not exists
-    if (!(-e $userMilestoneFile)) {
-        system("echo -n 0.1 > $userMilestoneFile");
+    if (!(-e $userFile)) {
+        writeFile($userFile, ["0", "0.1"]);
     }
 }
 
@@ -410,17 +370,19 @@ sub createNewIssue($$$$;$) {
 
     # now write current issue file (with comments and HISTORY)
     push(@{$tagHash{"[HISTORY]"}}, "created: ".strftime("%Z, %a %b %e %H:%M:%S %Y", localtime())." at $checkout");
-    my ($currentIssueFileName, $currentIssueFile) = getFileName($FILE_NAME_CURRENT_ISSUE, $foolPath, $latestValue);
+    my ($currentIssueFileName, $currentIssueFile) = getFileName($FILE_NAME_CURRENT_ISSUE, $latestValue);
     writeTaggedFile($currentIssueFile, \%tagHash);
 
     # user info
     printf("created issue ".$currentIssueFileName);
 
     # write issue into issues file
-    system("echo \"$latestValue/$username/$email/$issueType/open/$milestone/$title\" >> $issuesFile");
+    system("echo \"$latestValue/$userName/$email/$issueType/open/$milestone/$title\" >> $issuesFile");
 
-    # update .fool/<user>/.latest file
-    system("echo -n $latestValue > $userLatestFile");
+    # update .fool/<user>/<email> file
+    my @userFileContent = readFile($userFile);
+    $userFileContent[0]++;
+    writeFile($userFile, \@userFileContent);
 }
 
 
@@ -454,7 +416,7 @@ sub writeFile($\$) {
     open($FH, ">", $fileName) || EXIT(255, "cannot open $fileName: $!");
 
     foreach my $line (@{$linesRef}) {
-        print($FH $line);
+        print($FH $line."\n");
     }
     close($FH);
 }
@@ -565,24 +527,24 @@ sub printIssue($$$) {
     # issue line has to be printed
     if ($line =~ /^([^\/]+)\/([^\/]+)\/([^\/]+)\/([^\/]+)\/([^\/]+)\/([^\/]+)\/(.+)$/) {
         # process with line elements
-        my ($id, $userName, $email, $type, $state, $milestone, $title) = ($1, $2, $3, $4, $5, $6, $7);
+        my ($id, $userName, $email, $issueType, $state, $milestone, $title) = ($1, $2, $3, $4, $5, $6, $7);
 
         # do some string formattings (to shorten the output to screen width if not option -l is used!)
-        my $userNameText  =      shortenString($userName,           $userNameLength);
-        my $titleText     = "\"".shortenString($title,              $maxTitleLength-2)     ."\"";      # -2 because of the quotation marks "<text>"
-        my $typeText      = "[". shortenString($type,               $ISSUE_TYPES_LENGTH-2) ."]";       # -2 because of the brackets [<type>]
-        my $stateText     = "[". shortenString($state,              $ISSUE_STATES_LENGTH-2)."]";       # -2 because of the brackets [<state>]
-        my $milestoneText = "[". shortenString($milestone,          $milestoneLength-2)    ."]";       # -2 because of the brackets [<MLST>]
+        my $userNamePrepared  =      shortenString($userName,           $userNameLength);
+        my $titlePrepared     = "\"".shortenString($title,              $maxTitleLength-2)     ."\"";      # -2 because of the quotation marks "<text>"
+        my $issueTypePrepared =      shortenString($issueType,          $ISSUE_TYPES_LENGTH);
+        my $statePrepared     =      shortenString($state,              $ISSUE_STATES_LENGTH);
+        my $milestonePrepared = "\"".shortenString($milestone,          $milestoneLength-2)    ."\"";      # -2 because of the brackets [<MLST>]
 
         # now print the stuff
         if (!$long) {   # print each issue into one line as long as the window is not too smal otherwise line will be printed uncut (see calculation of $maxTitleLength)
             # if not -l print a header line
             if (!$alreadyWritten) {
-                printf("#%-".$idLength."s %-".$userNameLength."s %-".$maxTitleLength."s %-".$ISSUE_TYPES_LENGTH."s %-".$ISSUE_STATES_LENGTH."s %s\n", "ISSUE", "USERNAME", "TITLE", "TYPE", "STATE", "MILESTONE");
+                printf("%-".($idLength+$userNameLength+1)."s %-".$maxTitleLength."s %-".$ISSUE_TYPES_LENGTH."s %-".$ISSUE_STATES_LENGTH."s %s\n", "ISSUE", "TITLE", "TYPE", "STATE", "MILESTONE");
                 printf(("-" x (45+$maxTitleLength))."\n");
             }
 
-            printf("#%0".$idLength."d %-".$userNameLength."s %-".$maxTitleLength."s %-".$ISSUE_TYPES_LENGTH."s %-".$ISSUE_STATES_LENGTH."s %s\n", $id, $userNameText, $titleText, $typeText, $stateText, $milestoneText);
+            printf("%-".($idLength+$userNameLength+1)."s %-".$maxTitleLength."s %-".$ISSUE_TYPES_LENGTH."s %-".$ISSUE_STATES_LENGTH."s %s\n", "".$id."\/".$userNamePrepared, $titlePrepared, $issueTypePrepared, $statePrepared, $milestonePrepared);
         }
         else {          # if -l parameter is given the issue line is printed uncut in any case
             # if this is not the first line to be printed print a ############### separator line
@@ -591,10 +553,15 @@ sub printIssue($$$) {
             }
 
             # now print header line
-            printf("#%0".$idLength."d %-".$userNameLength."s %-".$maxTitleLength."s %-".$ISSUE_TYPES_LENGTH."s %-".$ISSUE_STATES_LENGTH."s %s\n\n", $id, $userName, "\"".$title."\"", "[".$type."]", "[".$state."]", "[".$milestone."]");
+            printf("Issue ....... %s\n".
+                   "Email ....... %s\n".
+                   "Title ....... %s\n".
+                   "Type ........ %s\n".
+                   "State ....... %s\n".
+                   "Milestone ... %s\n\n", "".$id."\/".$userName, $email, $title, $issueType, $state, $milestone);
 
             # now try to print the comment/HISTORY file
-            my $currentIssueFile   = getFileName($FILE_NAME_CURRENT_ISSUE, $foolPath, $id);
+            my $currentIssueFile   = getFileName($FILE_NAME_CURRENT_ISSUE, $id);
             my @commentHistoryFile = readFile($currentIssueFile);
             foreach my $line (@commentHistoryFile) {
                 printf("$line\n");
@@ -637,18 +604,18 @@ sub newCmd() {  # new [-c|-p] <title>
     prepareUserDir();   # may be we have to create the user directory if this is the first time current user calls 'new' command
 
     # reading latest issue value from file (file contains only this one line!)
-    my $userLatestValue = (readFile($userLatestFile))[0];
+    my @userFileContent = readFile($userFile);
+    my $userLatestValue = $userFileContent[0];
+    my $userMilestone   = $userFileContent[1];
 
     if ($userLatestValue !~ /^[0-9]+$/) {
-        EXIT(255, "$userLatestFile contains invalid value: $userLatestValue");
+        EXIT(255, "$userFile contains invalid latest value!");
     }
     $userLatestValue++; # increment for current issue
 
     # reading milestone value from file (file contains only this one line!)
-    my $userMilestone = (readFile($userMilestoneFile))[0];
-
     if (!$userMilestone) {
-        EXIT(255, "$userMilestoneFile contains invalid value: $userMilestone");
+        EXIT(255, "$userFile contains invalid milestone value!");
     }
 
     my $tempFile  = "";
@@ -683,7 +650,7 @@ sub newCmd() {  # new [-c|-p] <title>
 
         if ($arguments[0] eq "-c") {
             prepareEditor();
-            $tempFile = getFileName($FILE_NAME_TEMP, $userPath);
+            $tempFile = getFileName($FILE_NAME_TEMP);
             system("echo -n > $tempFile");      # ensure that .fool/<user>/.temp exists and is empty!
             system("$editor $tempFile");        # open editor to edit temp file
         }
@@ -696,8 +663,8 @@ sub newCmd() {  # new [-c|-p] <title>
 
 
 # create new issue
-sub lsCmd() {   # ls [-l] [<pattern>]
-    DEBUG($DEBUG_LOW, "lsCmd()");
+sub grepCmd() {   # grep [-l] [<pattern>]
+    DEBUG($DEBUG_LOW, "grepCmd()");
     my @arguments = @_;
 
     my $long = 0;
@@ -736,19 +703,17 @@ sub lsCmd() {   # ls [-l] [<pattern>]
 
 
 # create new issue
-sub showCmd() { # show [-l] <issue>
-    DEBUG($DEBUG_LOW, "showCmd()");
+sub lsCmd() { # ls [<issue>]
+    DEBUG($DEBUG_LOW, "lsCmd()");
     my @arguments = @_;
 
-    my $long = 0;
-
     # check command arguments
-    if (@arguments && $arguments[0] eq "-l") {
-        $long = 1;
-        shift(@arguments);
+    if (@arguments > 1) {
+        $cmd{"help"}->("'git-fool ls' parameters mismatch", 255);
     }
-    if (@arguments != 1 || $arguments[0] !~ /^[0-9]+$/) {
-        $cmd{"help"}->("'git-fool show' parameters mismatch", 255);
+    if (!@arguments) {
+        grepCmd();
+        return;
     }
 
     # test if init has already be done
@@ -759,14 +724,13 @@ sub showCmd() { # show [-l] <issue>
 
     # search and if found handle issue
     foreach my $line (@issuesFileContent) {
-        if ($line =~ /^([^\/]+)/) {
-            # process with line elements
-            if ($1 == $arguments[0]) {
-                printIssue($line, $long, 0);
-                last;
-            }
+        if ($line =~ /^$arguments[0]/) {
+            printIssue($line, 1, 0);
+            return;
         }
     }
+    
+    printf("given issue [$arguments[0]] couldn't be matched\n");
 }
 
 
@@ -791,7 +755,7 @@ sub editCmd() { # edit <issue>
     prepareUserName(1);
     prepareCheckout(1);
 
-    # search for given issue in .issue file
+    # search for given issue in issue file
     my $lineIndex;
     for ($lineIndex = 0; $lineIndex<@issuesFileContent; $lineIndex++) {
         if ($issuesFileContent[$lineIndex] =~ /^([^\/]+)/) {
@@ -862,10 +826,20 @@ sub editCmd() { # edit <issue>
         }
 
         # read tagged file
-        my ($currentIssueFileName, $currentIssueFile) = getFileName($FILE_NAME_CURRENT_ISSUE, $foolPath, $arguments[0]);
+        my ($currentIssueFileName, $currentIssueFile) = getFileName($FILE_NAME_CURRENT_ISSUE, $arguments[0]);
 
         print $currentIssueFile;
 
+
+
+#hier gehts weiter..........
+#        xxxxxxxxxxx
+#        readfile
+#        create temp file
+#        after change read temp file
+#        beide none sections vergleichen        -> $issueChanged = 1;
+#        beide files zusammenhängen
+#        file überschreiben
 
 
 #        my %tagHash = ();
@@ -876,28 +850,21 @@ sub editCmd() { # edit <issue>
 #    
 #    
 #    
-#        my ($currentIssueFileName, $currentIssueFile) = getFileName($FILE_NAME_CURRENT_ISSUE, $foolPath, $latestValue);
+#        my ($currentIssueFileName, $currentIssueFile) = getFileName($FILE_NAME_CURRENT_ISSUE, $latestValue);
 #        writeTaggedFile($currentIssueFile, \%tagHash);
 #    
 #    
 #    
 #        # write issue into issues file
-#        system("echo \"$latestValue/$username/$email/$issueType/open/$milestone/$title\" >> $issuesFile");
+#        system("echo \"$latestValue/$userName/$email/$issueType/open/$milestone/$title\" >> $issuesFile");
 #
 
 
-#        xxxxxxxxxxx
-#        readfile
-#        create temp file
-#        after change read temp file
-#        beide none sections vergleichen        -> $issueChanged = 1;
-#        beide files zusammenhängen
-#        file überschreiben
 
 
 
 #        prepareEditor();
-#        $tempFile = getFileName($FILE_NAME_TEMP, $userPath);
+#        $tempFile = getFileName($FILE_NAME_TEMP);
 #        system("echo -n > $tempFile");      # ensure that .fool/<user>/.temp exists and is empty!
 #        system("$editor $tempFile");        # open editor to edit temp file
 
@@ -951,14 +918,17 @@ sub helpCmd() { # help
     }
 
     printf("git-fool v0.1 (c) Manfred Hauser / git\@74th.de under the terms of GPL v3.0 or newer\n\n".
-           "Usage: git-fool <command> [option(s)]\n".
+           "usage: git-fool <command> [option(s)]\n".
            "Commands:\n".
            "  init                         initialize git-fool within current git repository\n".
            "  new [-c|-p] <title>          create new issue (give -c(omment and parameters)\n".
            "                               or -p(parameters only)), title mustn't contain any slashes!\n".
-           "  ls [-l] [<patterns>]         list all issues fulfilling given pattern (-l(ong))\n".
-           "  show [-l] <issue>            show given issue (-l(ong))\n".
-           "  edit <issue>                 edit given issue\n".
+           "  grep [-l] [<patterns>]       list all issues matching at least one given pattern (-l(ong))\n".
+           "                               comments are not grepped!\n".
+           "  ls [<issue>]                 show given issue (without issue it will act like 'git-fool grep')\n".
+           "                               given issue will be used as prefix of entries in issue file\n".
+           "                               so it can be e.g. '1', '1/3D' and '1/3DES7git\@74th.de'\n".
+           "  edit <issue>                 edit given 'open' issue\n".
            "  cp <issue>                   copies given issue and starts editing\n".
            "  close <issue>                set given issue to close\n".
            "  open <issue>                 reopen given issue\n".
@@ -995,6 +965,8 @@ sub dummyCmd() {
 #########################################
 ############## main() ###################
 #########################################
+my $cmd      = shift(@ARGV);    # first element of @ARGV is fool's command!
+
 if (!defined($cmd)) {
     $cmd = "";
 }
