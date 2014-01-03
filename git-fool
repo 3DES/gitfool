@@ -38,7 +38,7 @@ my $ISSUE_STATES_LENGTH = 6+2;      # means length("[closed]") = 6+2
 
 
 # some necessary global variables
-my $repo     = Git::Repository->new();
+my $repository = Git::Repository->new();
 
 
 # some possibly necessary global variables (because of performance only filled when needed!)
@@ -76,10 +76,12 @@ my %cmd = ("init"      => \&initCmd,           # $cmd{"init"}->(...)
 # define file names
 my $FILE_NAME_ISSUES        = 0;
 my $FILE_NAME_TEMP          = 1;
-my $FILE_NAME_CURRENT_ISSUE = 2;
-my $FILE_NAME_USER          = 3;
+my $FILE_NAME_CERTAIN_ISSUE = 2;
+my $FILE_NAME_CURRENT_ISSUE = 3;
+my $FILE_NAME_USER          = 4;
 my %FILE_NAMES = ( $FILE_NAME_ISSUES            =>    "issues",
                    $FILE_NAME_TEMP              =>    ".temp",
+                   $FILE_NAME_CERTAIN_ISSUE     =>    "",              # to be created user name and email are necessary that are not known atm.
                    $FILE_NAME_CURRENT_ISSUE     =>    "",              # to be created user name and email are necessary that are not known atm.
                    $FILE_NAME_USER              =>    "",              # to be created user name and email are necessary that are not known atm.
                   );
@@ -146,13 +148,13 @@ sub prepareUserName($) {
 
     # only if $userName is not yet set because of performance reaseons!
     if (!$userName) {
-        $userName = $repo->run("config" => "user.name");
+        $userName = $repository->run("config" => "user.name");
         
         # user.name must be set to make git fool working!
         if (!$userName && $errorHandling) {
             EXIT(255, "user.name not set in git!");
         }
-        $shortUserName = substr($userName, 0, 2);
+        $shortUserName = uc(substr($userName, 0, 2));
         
         # if $shortUserName length is less than 2 $userName length is also less than two but two characters are our minimum so enlarge them!!!
         if (length($shortUserName) < 2) {
@@ -170,7 +172,7 @@ sub prepareEmail($) {
 
     # only if $email is not yet set because of performance reaseons!
     if (!$email) {
-        $email    = $repo->run("config" => "user.email");
+        $email    = $repository->run("config" => "user.email");
         if (!$email && $errorHandling) {
             EXIT(255, "user.email not set in git!");
         }
@@ -184,7 +186,7 @@ sub prepareEditor() {
 
     # only if $editor is not yet set because of performance reaseons!
     if (!$editor) {
-        $editor   = $repo->run("config" => "core.editor");
+        $editor   = $repository->run("config" => "core.editor");
         if (!$editor) {
             $editor = "vi";
         }
@@ -198,7 +200,7 @@ sub prepareCheckout($) {
     my ($errorHandling) = @_;
     
     if (!$checkout) {
-        $checkout = $repo->run("rev-parse" => "HEAD");
+        $checkout = $repository->run("rev-parse" => "HEAD");
         if (!$checkout && $errorHandling) {
             EXIT(255, "git-fool needs a valid checkout!");
         }
@@ -207,6 +209,7 @@ sub prepareCheckout($) {
 
 
 # build git-fool system file name
+sub getFileName($;@);       # prototyping
 sub getFileName($;@) {
     DEBUG($DEBUG_MED, "getFileName()");
 
@@ -225,9 +228,19 @@ sub getFileName($;@) {
         if (scalar(@parameters) != 0) {
             EXIT(254, "internal error - wrong amount of parameters: $fileType");
         }
+        prepareEmail(1);
 
         my $fileName = $FILE_NAMES{$fileType};
-        return ($fileName, $userPath."/".$fileName);
+        return ($fileName, $userPath."/".$email.$fileName);
+    }
+    elsif ($fileType == $FILE_NAME_CERTAIN_ISSUE) {
+        if (scalar(@parameters) != 3) {
+            EXIT(254, "internal error - wrong amount of parameters: $fileType");
+        }
+        my ($issueValue, $userName, $email) = @parameters;
+
+        my $fileName = ".".join("_", ($issueValue, $userName, $email));
+        return ($fileName, $foolPath."/".$fileName);
     }
     elsif ($fileType == $FILE_NAME_CURRENT_ISSUE) {
         if (scalar(@parameters) != 1) {
@@ -237,8 +250,7 @@ sub getFileName($;@) {
         prepareUserName(1);
         prepareEmail(1);
 
-        my $fileName = ".".join("_", ($issueValue, $userName, $email));
-        return ($fileName, $foolPath."/".$fileName);
+        return getFileName("$FILE_NAME_CERTAIN_ISSUE", $issueValue, $userName, $email);
     }
     elsif ($fileType == $FILE_NAME_USER) {
         if (scalar(@parameters) != 0) {
@@ -411,6 +423,14 @@ sub getCurrentUserId() {
 }
 
 
+# create issue entry
+sub createIssueEntry($$$$$) {
+    my ($issueTag, $issueType, $issueState, $milestone, $issueTitle) = @_;
+    
+    return "$issueTag/$issueType/$issueState/$milestone/$issueTitle";
+}
+
+
 # create a new issue with given values and update .fool/<user>/.latest file
 sub createNewIssue($$$$;$) {
     DEBUG($DEBUG_MED, "createNewIssue()");
@@ -434,7 +454,7 @@ sub createNewIssue($$$$;$) {
     }
 
     # now write current issue file (with comments and HISTORY)
-    push(@{$tagHash{"[HISTORY]"}}, "created: ".strftime("UTC, %b %e %H:%M:%S %Y", gmtime())." -by- ".getUserId($userName, $email)." -at- $checkout");
+    push(@{$tagHash{"[HISTORY]"}}, "created: ".strftime("UTC, %b %e %H:%M:%S %Y", gmtime())." -by- ".getUserId($userName, $email)." -at- $checkout");       # @todo: branch/tag ermitteln und angeben, falls so einer existiert was nicht immer der Fall ist, z.B. wenn origin/master oder der hash zum auschecken verwendet wurde. gehen tut das mit (Fehlerprüfung git-versions-prüfung (>=1.8 vermutlich) nicht vergessen!): git symbolic-ref -q --short HEAD || git describe --tags --exact-match
     my ($currentIssueFileName, $currentIssueFile) = getFileName($FILE_NAME_CURRENT_ISSUE, $issueValue);
     writeTaggedFile($currentIssueFile, \%tagHash);
 
@@ -442,7 +462,7 @@ sub createNewIssue($$$$;$) {
     printf("created issue ".$currentIssueFileName);
 
     # write issue into issues file
-    system("echo \"".getCurrentIssueTag($issueValue)."/$issueType/open/$milestone/$title\" >> $issuesFile");
+    system("echo \"".createIssueEntry(getCurrentIssueTag($issueValue), $issueType, "open", $milestone, $title)."\" >> $issuesFile");
 
     # update .fool/<user>/<email> file
     my @userFileContent = readFile($userFile);
@@ -476,7 +496,7 @@ sub readFile($) {
 
 
 # writes content of a given array ref into a file
-sub writeFile($\$) {
+sub writeFile($$) {
     DEBUG($DEBUG_MED, "writeFile()");
     my ($fileName, $linesRef) = @_;
 
@@ -641,7 +661,16 @@ sub printIssue($$$) {
 }
 
 
+#
+sub normalizeString(\$) {
+    my ($titleRef) = @_;
+    
+    CHOMP($titleRef);
+    ${$titleRef} =~ s/[\x00-\x1F\x7F]//g;   # replace not allowed characters from string
+    ${$titleRef} =~ s/(^(\")+|(\")+$)//g;   # replace quotation mark at beginning and end of the string
+    ${$titleRef} =~ s/\//_/g;               # slash (/) is not allowed inside title so replace it by underscore (_)
 
+}
 
 ################################################
 ############## fool commands ###################
@@ -691,30 +720,41 @@ sub newCmd() {  # new [-c|-p] <title>
     if ($arguments[0] eq "-c" || $arguments[0] eq "-p") {
         # reading milestrom from user input
         printf("Milestone [$userMilestone]: ");     # pressing just [ENTER] doesn't change default milestone
-        my $newUserMilestone = <STDIN>;   # read new milestone
-        CHOMP($newUserMilestone);
-        if ($newUserMilestone) {
-            $userMilestone = $newUserMilestone;
+        my $newMilestone = <STDIN>;         # read new milestone
+        normalizeString($newMilestone);     # make a clean string out of it
+        if ($newMilestone) {
+            $userMilestone = $newMilestone;
         }
 
         # reading issue type from user input
-        printf("issue type: ");
-        my $counter = 1;
-        foreach my $issue (sort(keys(%ISSUE_TYPES))) {
-            printf("$issue-$ISSUE_TYPES{$issue}");
-            if ($counter++ < scalar(keys(%ISSUE_TYPES))) {
-                printf(", ");
+        while(1) {
+            printf("issue type: ");
+            my $counter = 1;
+            foreach my $issue (sort(keys(%ISSUE_TYPES))) {
+                printf("$issue-$ISSUE_TYPES{$issue}");
+                if ($counter++ < scalar(keys(%ISSUE_TYPES))) {
+                    printf(", ");
+                }
+                else {
+                    printf(" [$issueType]: ");  # print default option if user presses just [ENTER]
+                }
             }
-            else {
-                printf(" [$issueType]: ");  # print default option if user presses just [ENTER]
+
+            my $newIssueType = <STDIN>;
+            CHOMP($newIssueType);
+            if ($newIssueType =~ /^[0-9]+$/ && $newIssueType >= 0 && $newIssueType < scalar(keys(%ISSUE_TYPES))) {      # valid user input
+                $issueType = $newIssueType;
+                last;
             }
-        }
-        my $newIssueType = <STDIN>;
-        CHOMP($newIssueType);
-        if ($newIssueType =~ /^[0-9]+$/ && $newIssueType >= 0 && $newIssueType < scalar(keys(%ISSUE_TYPES))) {
-            $issueType = $newIssueType;
+            elsif (!$newIssueType) {    # just [ENTER]
+                last;
+            }
+            else {  # invalid user input
+                printf("issue type $newIssueType is not valid!\n");
+            }
         }
 
+        # prepare and run default editor if parameter -c has been given
         if ($arguments[0] eq "-c") {
             prepareEditor();
             $tempFile = getFileName($FILE_NAME_TEMP);
@@ -725,7 +765,14 @@ sub newCmd() {  # new [-c|-p] <title>
         shift(@arguments);      # remove cmd from arguments list because rest is the issue title
     }
 
-    createNewIssue($userIssueValue, $ISSUE_TYPES{$issueType}, $userMilestone, join(" ", @arguments), $tempFile);
+    my $title = join(" ", @arguments);  # create title out of the rest of given arguments
+    normalizeString($title);
+    
+    if (!(length($title))) {
+        EXIT(255, "title cannot be empty!");
+    }
+
+    createNewIssue($userIssueValue, $ISSUE_TYPES{$issueType}, $userMilestone, $title, $tempFile);
 }
 
 
@@ -815,17 +862,20 @@ sub editCmd() { # edit <issue>
     my @arguments = @_;
 
     # check command arguments
-    if (@arguments != 1 || $arguments[0] !~ /^[0-9]+$/) {
+    if (@arguments != 1) {
         $cmd{"help"}->("'git-fool edit' parameters mismatch", 255);
     }
 
     # test if init has already be done
     testFoolDir();
+    
+    # prepare user directory if necessary because we need it for the temp file
+    prepareUserDir();
 
     # read issues file
     my @issuesFileContent = readFile($issuesFile);
 
-    # prepare necessary strings
+    # prepare necessary strings (for HISTORY because for the issue we take all information from the issue itself otherwise a user cannot change an issue from another sb. else!)
     prepareEmail(1);
     prepareUserName(1);
     prepareCheckout(1);
@@ -833,17 +883,16 @@ sub editCmd() { # edit <issue>
     # search for given issue in issue file
     my $lineIndex;
     for ($lineIndex = 0; $lineIndex<@issuesFileContent; $lineIndex++) {
-        if ($issuesFileContent[$lineIndex] =~ /^([^\/]+)/) {
-            # process with line elements
-            if ($1 == $arguments[0]) {
-                last;
-            }
+        if ($issuesFileContent[$lineIndex] =~ /^$arguments[0]/) {
+            last;   # finish if line matches
         }
     }
     if ($lineIndex == @issuesFileContent) {
-        EXIT(255, "given issue doesn't exist!");
+        printf("given issue doesn't exist!");
+        return;
     }
 
+    # print issue to screen
     printIssue($issuesFileContent[$lineIndex], 0, 0);
     printf("\n");
 
@@ -856,13 +905,25 @@ sub editCmd() { # edit <issue>
         # process with line elements
         my ($id, $userName, $email, $issueType, $state, $milestone, $title) = ($1, $2, $3, $4, $5, $6, $7);
 
+        # reading new title from user input
+        printf("Title [$title]:\n");    # pressing just [ENTER] doesn't change original title
+        my $newTitle = <STDIN>;         # read new title
+        normalizeString($newTitle);
+        if (length($newTitle)) {
+            $title = $newTitle;
+            $issueChanged = 1;
+            printf("changed\n");    # @todo: rauswerfen!
+        }
+
         # reading milestrom from user input
         printf("Milestone [$milestone]: ");     # pressing just [ENTER] doesn't change default milestone
         my $newMilestone = <STDIN>;   # read new milestone
         CHOMP($newMilestone);
+        normalizeString($newMilestone);
         if ($newMilestone) {
             $milestone = $newMilestone;
             $issueChanged = 1;
+            printf("changed\n");    # @todo: rauswerfen!
         }
 
         # find issue type string and convert it into issue type value
@@ -872,39 +933,49 @@ sub editCmd() { # edit <issue>
                 last;
             }
         }
-        # reading issue type from user input
-        printf("issue type: ");
-        my $counter = 1;
-        foreach my $issue (sort(keys(%ISSUE_TYPES))) {
-            printf("$issue-$ISSUE_TYPES{$issue}");
-            if ($counter++ < scalar(keys(%ISSUE_TYPES))) {
-                printf(", ");
-            }
-            else {
-                printf(" [$issueType]: ");  # print default option if user presses just [ENTER]
-            }
-        }
-        my $newIssueType = <STDIN>;
-        CHOMP($newIssueType);
-        if ($newIssueType =~ /^[0-9]+$/ && $newIssueType >= 0 && $newIssueType < scalar(keys(%ISSUE_TYPES))) {
-            $issueType = $newIssueType;
-            $issueChanged = 1;
-        }
 
-        # reading new title from user input
-        printf("Title [$title]:\n");    # pressing just [ENTER] doesn't change original title
-        my $newTitle = <STDIN>;         # read new title
-        CHOMP($newTitle);
-        if ($newTitle) {
-            $title = $newTitle;
-            $issueChanged = 1;
+        # reading issue type from user input
+        while(1) {
+            printf("issue type: ");
+            my $counter = 1;
+            foreach my $issue (sort(keys(%ISSUE_TYPES))) {
+                printf("$issue-$ISSUE_TYPES{$issue}");
+                if ($counter++ < scalar(keys(%ISSUE_TYPES))) {
+                    printf(", ");
+                }
+                else {
+                    printf(" [$issueType]: ");  # print default option if user presses just [ENTER]
+                }
+            }
+        
+            my $newIssueType = <STDIN>;
+            CHOMP($newIssueType);
+            if ($newIssueType =~ /^[0-9]+$/ && $newIssueType >= 0 && $newIssueType < scalar(keys(%ISSUE_TYPES))) {      # valid user input
+                $issueType = $newIssueType;
+                $issueChanged = 1;
+                printf("changed\n");    # @todo: rauswerfen!
+                last;
+            }
+            elsif (!$newIssueType) {    # just [ENTER]
+                last;
+            }
+            else {  # invalid user input
+                printf("issue type $newIssueType is not valid!\n");
+            }
         }
 
         # read tagged file
-        my ($currentIssueFileName, $currentIssueFile) = getFileName($FILE_NAME_CURRENT_ISSUE, $arguments[0]);
+        my ($currentIssueFileName, $currentIssueFile) = getFileName($FILE_NAME_CERTAIN_ISSUE, $id, $userName, $email);
 
-        print $currentIssueFile;
+        # update issues array
+        if ($issueChanged) {
+            $issuesFileContent[$lineIndex] = createIssueEntry(getCurrentIssueTag($id), $ISSUE_TYPES{$issueType}, $state, $milestone, $title);
+            writeFile($issuesFile, \@issuesFileContent);
+        }
 
+        
+        
+        
 
 
 #hier gehts weiter..........
@@ -931,7 +1002,7 @@ sub editCmd() { # edit <issue>
 #    
 #    
 #        # write issue into issues file
-#        system("echo \"".getCurrentIssueTag($issueValue)."/$issueType/open/$milestone/$title\" >> $issuesFile");
+#        system("echo \"".createIssueEntry(getCurrentIssueTag($issueValue), $issueType, "open", $milestone, $title)."\" >> $issuesFile");
 #                                
 
 
@@ -1007,10 +1078,11 @@ sub helpCmd() { # help
            "                               given issue will be used as prefix of entries in issue file\n".
            "                               so it can be e.g. '1', '1/3D' and '1/3DES/git\@74th.de'\n".
            "  edit <issue>                 edit given 'open' issue\n".
-           "  cp <issue>                   copies given issue and starts editing\n".
-           "  close <issue>                set given issue to close\n".
+           "  cp <issue>                   copies given issue and starts editing\n".                                    # @todo: beim kopieren evtl. original issue im title eintragen?
+           "  close <issue>                set given issue to close\n".                                                 # @todo: Benutzer fragen, ob der eingegebene Milestone noch stimmt oder neuen eigeben lassen!
            "  open <issue>                 reopen given issue\n".
-           "  rm <issue>                   remove given issue from disk\n".
+           "                               in most cases it's better to copy instead of reopening!\n".
+           "  rm <issue>                   remove given issue from disk\n".                                             # @todo: anwender fragen ob er sich wirklich sicher ist
            "  milestone                    show current milestone\n".
            "  milestone [-u <old>] <mlst>  set new current milestone\n".
            "                               (-u(pdate) all open <old> MLSTs to <mlst>)\n".
