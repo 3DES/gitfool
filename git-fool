@@ -81,10 +81,41 @@ my $FILE_NAME_CURRENT_ISSUE = 3;
 my $FILE_NAME_USER          = 4;
 my %FILE_NAMES = ( $FILE_NAME_ISSUES            =>    "issues",
                    $FILE_NAME_TEMP              =>    ".temp",
-                   $FILE_NAME_CERTAIN_ISSUE     =>    "",              # to be created user name and email are necessary that are not known atm.
-                   $FILE_NAME_CURRENT_ISSUE     =>    "",              # to be created user name and email are necessary that are not known atm.
-                   $FILE_NAME_USER              =>    "",              # to be created user name and email are necessary that are not known atm.
+                   $FILE_NAME_CERTAIN_ISSUE     =>    "",              # to be filled during runtime, user name and email are necessary that are not known atm.
+                   $FILE_NAME_CURRENT_ISSUE     =>    "",              # to be filled during runtime, user name and email are necessary that are not known atm.
+                   $FILE_NAME_USER              =>    "",              # to be filled during runtime, user name and email are necessary that are not known atm.
                   );
+
+
+
+# define history file sections
+my $HISTORY_FILE_SECTION_NONE    = 0;
+my $HISTORY_FILE_SECTION_HISTORY = 1;
+my %HISTORY_FILE_SECTIONS = ( $HISTORY_FILE_SECTION_NONE      =>  "none",
+                              $HISTORY_FILE_SECTION_HISTORY   =>  "[HISTORY]",
+                           );
+       
+
+
+# define history tokens
+my $HISTORY_TOKEN_CREATED   = 0;
+my $HISTORY_TOKEN_COPIED    = 1;
+my $HISTORY_TOKEN_CHANGED   = 2;
+my $HISTORY_TOKEN_CLOSED    = 3;
+my $HISTORY_TOKEN_REOPENED  = 4;
+my $HISTORY_TOKEN_REPAIRED  = 5;
+my %HISTORY_TOKENS = ( $HISTORY_TOKEN_CREATED   =>  "CREATED:  ",   # usually first entry in history file
+                       $HISTORY_TOKEN_COPIED    =>  "COPIED:   ",   # if this exists in history file it's usually the first entry because it's a copy of another issue
+                       $HISTORY_TOKEN_CHANGED   =>  "CHANGED:  ",
+                       $HISTORY_TOKEN_CLOSED    =>  "CLOSED:   ",
+                       $HISTORY_TOKEN_REOPENED  =>  "REOPENED: ",
+                       $HISTORY_TOKEN_REPAIRED  =>  "REPAIRED: ",   # if this exists in history file it's usually the first entry because original file has been lost
+                     );
+
+
+# define user file elements
+my $USER_FILE_ISSUE_COUNTER = 0;
+my $USER_FILE_MILESTONE     = 1;
 
 
 
@@ -102,11 +133,26 @@ sub mySIGINT() {
 # print string as hex
 sub printHex($) {
     my ($string) = @_;
-    
+
     for (my $i=0; $i<length($string); $i++) {
         printf("%02X ", ord(substr($string, $i, 1)));
     }
     printf("\n");
+}
+
+
+# compares two arrays
+sub arraysEqual($$) {
+    my ($array1Ref, $array2Ref) = @_;
+
+    return 0 unless @{$array1Ref} == @{$array2Ref};         # return false if #elements are different!
+
+    my $i = 0;
+    foreach my $element (@{$array1Ref}) {
+        return 0 unless $element eq ${$array2Ref}[$i++];    # return false if at least one element differs
+    }
+
+    return 1;                                               # if arrays are identical return true
 }
 
 
@@ -121,7 +167,19 @@ sub CHOMP(\$) {
 sub DEBUG($$) {
     my ($level, $message) = @_;
     if ($DEBUG >= $level) {
-        printf("DEBUG[$level]: $message\n");
+        printf("DEBUG[$level] - $message\n");
+        my ($package, $filename, $line, $subroutine) = caller(0);
+        printf("  from $filename".":$line");
+        ($package, $filename, $line, $subroutine) = caller(1);
+        if ($package && $filename && $line && $subroutine) {
+            if (rindex($subroutine, ':')) {
+                $subroutine = substr($subroutine, rindex($subroutine, ':')+1);
+            }
+            printf(" ($subroutine())\n");
+        }
+        else {
+            printf(" (main())\n");
+        }
     }
 }
 
@@ -149,13 +207,13 @@ sub prepareUserName($) {
     # only if $userName is not yet set because of performance reaseons!
     if (!$userName) {
         $userName = $repository->run("config" => "user.name");
-        
+
         # user.name must be set to make git fool working!
         if (!$userName && $errorHandling) {
             EXIT(255, "user.name not set in git!");
         }
         $shortUserName = uc(substr($userName, 0, 2));
-        
+
         # if $shortUserName length is less than 2 $userName length is also less than two but two characters are our minimum so enlarge them!!!
         if (length($shortUserName) < 2) {
             $userName      .= "_";
@@ -198,7 +256,7 @@ sub prepareEditor() {
 sub prepareCheckout($) {
     DEBUG($DEBUG_MED, "prepareCheckout()");
     my ($errorHandling) = @_;
-    
+
     if (!$checkout) {
         $checkout = $repository->run("rev-parse" => "HEAD");
         if (!$checkout && $errorHandling) {
@@ -350,7 +408,8 @@ sub prepareFoolDir() {
 
     # create .fool/issues file if not exists
     if (!(-e getFileName($FILE_NAME_ISSUES))) {
-        system("touch ".getFileName($FILE_NAME_ISSUES));
+        my ($fileName, $file) = getFileName($FILE_NAME_ISSUES);
+        createFile($file);
     }
 }
 
@@ -376,98 +435,87 @@ sub prepareUserDir() {
 
 # creates a short issue tag from given parameters (issue value and user name)
 sub getShortIssueTag($$) {
+    DEBUG($DEBUG_MED, "getShortIssueTag()");
     my ($issueValue, $userName) = @_;
-    
+
     return ($issueValue."/".$userName);
 }
 
 
 # create an issue tag from given parameter and current global value
 sub getCurrentShortIssueTag($) {
+    DEBUG($DEBUG_MED, "getCurrentShortIssueTag()");
     my ($issueValue) = @_;
-    
+
     return getShortIssueTag($issueValue, $userName);
 }
 
 
 # creates an issue tag from given parameters (issue value, user name and email address)
 sub getIssueTag($$$) {
+    DEBUG($DEBUG_MED, "getCurrentShortIssueTag()");
     my ($issueValue, $userName, $email) = @_;
-    
+
     return (getShortIssueTag($issueValue, $userName)."/".$email);
 }
 
 
 # create an issue tag from given parameter and current global values
 sub getCurrentIssueTag($) {
+    DEBUG($DEBUG_MED, "getCurrentShortIssueTag()");
     my ($issueValue) = @_;
-    
+
     return getIssueTag($issueValue, $userName, $email);
 }
 
 
 # create user id from given parameters (user name and email address)
 sub getUserId($$) {
+    DEBUG($DEBUG_MED, "getUserId()");
     my ($userName, $email) = @_;
-    
+
     return ($userName."/".$email);
 }
 
 
 # create user id from current user
 sub getCurrentUserId() {
+    DEBUG($DEBUG_MED, "getCurrentUserId()");
     prepareEmail(1);
     prepareUserName(1);
-    
+
     return getUserId($userName, $email);
+}
+
+
+# inserts a given string into HISTORY section in a given tag hash
+sub addHistory($$;$) {
+    DEBUG($DEBUG_MED, "addHistory()");
+    my ($token, $tagHashRef, $comment) = @_;
+
+    if (!${$tagHashRef}{$HISTORY_FILE_SECTIONS{$HISTORY_FILE_SECTION_HISTORY}}) {
+        ${$tagHashRef}{$HISTORY_FILE_SECTIONS{$HISTORY_FILE_SECTION_HISTORY}} = [];
+    }
+
+    if (!$HISTORY_TOKENS{$token}) {
+        EXIT(254, "history token [$token] doesn't exist!");
+    }
+
+    my $entry = $HISTORY_TOKENS{$token}.strftime("UTC, %b %e %H:%M:%S %Y", gmtime())." -by- ".getCurrentUserId()." -at- $checkout";       # @todo: branch/tag ermitteln und angeben, falls so einer existiert was nicht immer der Fall ist, z.B. wenn origin/master oder der hash zum auschecken verwendet wurde. gehen tut das mit (Fehlerprüfung git-versions-prüfung (>=1.8 vermutlich) nicht vergessen!): git symbolic-ref -q --short HEAD || git describe --tags --exact-match
+    if (defined($comment)) {
+        $entry .= " - $comment";
+    }
+
+    push(@{${$tagHashRef}{$HISTORY_FILE_SECTIONS{$HISTORY_FILE_SECTION_HISTORY}}}, $entry);
 }
 
 
 # create issue entry
 sub createIssueEntry($$$$$) {
+    DEBUG($DEBUG_MED, "createIssueEntry()");
     my ($issueTag, $issueType, $issueState, $milestone, $issueTitle) = @_;
-    
+
     return "$issueTag/$issueType/$issueState/$milestone/$issueTitle";
-}
-
-
-# create a new issue with given values and update .fool/<user>/.latest file
-sub createNewIssue($$$$;$) {
-    DEBUG($DEBUG_MED, "createNewIssue()");
-    my ($issueValue, $issueType, $milestone, $title, $commentFile) = @_;
-
-    # prepare necessary strings
-    prepareEmail(1);
-    prepareUserName(1);
-    prepareCheckout(1);
-
-    # if exists read comment file to be handled when comment/HISTORY file is written
-    my %tagHash = ();
-    if ($commentFile && -s $commentFile) {
-        %tagHash = readTaggedFile($commentFile);
-        system("rm $commentFile");
-    }
-
-    # create comment/history file
-    if (!$tagHash{"[HISTORY]"}) {
-        $tagHash{"[HISTORY]"} = [];
-    }
-
-    # now write current issue file (with comments and HISTORY)
-    push(@{$tagHash{"[HISTORY]"}}, "created: ".strftime("UTC, %b %e %H:%M:%S %Y", gmtime())." -by- ".getUserId($userName, $email)." -at- $checkout");       # @todo: branch/tag ermitteln und angeben, falls so einer existiert was nicht immer der Fall ist, z.B. wenn origin/master oder der hash zum auschecken verwendet wurde. gehen tut das mit (Fehlerprüfung git-versions-prüfung (>=1.8 vermutlich) nicht vergessen!): git symbolic-ref -q --short HEAD || git describe --tags --exact-match
-    my ($currentIssueFileName, $currentIssueFile) = getFileName($FILE_NAME_CURRENT_ISSUE, $issueValue);
-    writeTaggedFile($currentIssueFile, \%tagHash);
-
-    # user info
-    printf("created issue ".$currentIssueFileName);
-
-    # write issue into issues file
-    system("echo \"".createIssueEntry(getCurrentIssueTag($issueValue), $issueType, "open", $milestone, $title)."\" >> $issuesFile");
-
-    # update .fool/<user>/<email> file
-    my @userFileContent = readFile($userFile);
-    $userFileContent[0]++;
-    writeFile($userFile, \@userFileContent);
 }
 
 
@@ -498,6 +546,7 @@ sub readFile($) {
 # writes content of a given array ref into a file
 sub writeFile($$) {
     DEBUG($DEBUG_MED, "writeFile()");
+
     my ($fileName, $linesRef) = @_;
 
     my $FH;
@@ -509,8 +558,34 @@ sub writeFile($$) {
     close($FH);
 }
 
+
+# adds given lines to an existing file if it doesn't exist it will be created
+sub appendFile($$) {
+    DEBUG($DEBUG_MED, "appendFile()");
+    my ($fileName, $linesRef) = @_;
+
+    my $FH;
+    open($FH, ">>", $fileName) || EXIT(255, "cannot open $fileName: $!");
+
+    foreach my $line (@{$linesRef}) {
+        print($FH $line."\n");
+    }
+    close($FH);
+}
+
+
+# creates an empty file, an existing one will be overwritten
+sub createFile($) {
+    DEBUG($DEBUG_MED, "createFile()");
+    
+    my ($fileName) = @_;
+    
+    writeFile($fileName, []);
+}
+
+
 # writes a given tag hash to a file (first writes optional leading tagless sections followed by optional tagged sections, tag means [<tag>])
-sub writeTaggedFile($\$) {
+sub writeTaggedFile($$) {
     DEBUG($DEBUG_MED, "writeTaggedFile()");
     my ($fileName, $fileContentRef) = @_;
 
@@ -562,23 +637,29 @@ sub readTaggedFile($) {
 
     my @lines = readFile($fileName);
 
-    my %tagContent = ("none" => []);
+    my %tagHash = ("none" => []);
 
     my $currenTag = "none";
     foreach my $line (@lines) {
         CHOMP($line);
 
         # tag line found?
-        if ($line =~ /^\[([^]]+)\]$/) {
+        if ($line =~ /^(\[[^]]+\])$/) {
             $currenTag = $1;
-            $tagContent{$currenTag} = [];           # create new tag entry in tag hash
+            $tagHash{$currenTag} = [];           # create new tag entry in tag hash
             next;                                   # line handled take next one
         }
 
-        push(@{$tagContent{$currenTag}}, $line);    # if not a tag line push it into current tag content array
+        push(@{$tagHash{$currenTag}}, $line);    # if not a tag line push it into current tag content array
     }
 
-    return %tagContent;
+    foreach my $section (keys(%tagHash)) {
+        while ($tagHash{$section} && scalar(@{$tagHash{$section}}) && !length(${$tagHash{$section}}[-1])) {  # remove latest lines as long as they are empty ones
+            pop(@{$tagHash{$section}});
+        }
+    }
+
+    return %tagHash;
 }
 
 
@@ -605,7 +686,7 @@ sub printIssue($$$) {
     # some variables to make later changes little bit easier!
     my $milestoneLength   = 9;
     my $idLength          = 6;
-    my $userNameLength    = 10;
+    my $userNameLength    = 10;         # @todo: da es evtl. nervt, wenn der username nicht vollständig angezeigt wird, das auf ein git config element legen!
     my $defaultTileLength = 35;
     my $maxTitleLength    = $wchar - 50; # depends on window size
     if ($maxTitleLength < 10) {
@@ -648,8 +729,9 @@ sub printIssue($$$) {
                    "Milestone : %s\n\n", getIssueTag($id, $userName, $email), $title, $issueType, $state, $milestone);
 
             # now try to print the comment/HISTORY file
-            my $currentIssueFile   = getFileName($FILE_NAME_CURRENT_ISSUE, $id);
-            my @commentHistoryFile = readFile($currentIssueFile);
+            my $certainIssueFile   = getFileName($FILE_NAME_CERTAIN_ISSUE, $id, $userName, $email);
+
+            my @commentHistoryFile = readFile($certainIssueFile);
             foreach my $line (@commentHistoryFile) {
                 printf("$line\n");
             }
@@ -664,13 +746,17 @@ sub printIssue($$$) {
 #
 sub normalizeString(\$) {
     my ($titleRef) = @_;
-    
+
     CHOMP($titleRef);
     ${$titleRef} =~ s/[\x00-\x1F\x7F]//g;   # replace not allowed characters from string
     ${$titleRef} =~ s/(^(\")+|(\")+$)//g;   # replace quotation mark at beginning and end of the string
-    ${$titleRef} =~ s/\//_/g;               # slash (/) is not allowed inside title so replace it by underscore (_)
+    ${$titleRef} =~ s/\//_/g;               # slash (/) is not allowed inside e.g. the title so replace all of them by underscore (_)
 
 }
+
+
+
+
 
 ################################################
 ############## fool commands ###################
@@ -678,7 +764,7 @@ sub normalizeString(\$) {
 
 
 # initialize git repository for git-fool (.fool folder will be created)
-sub initCmd() {
+sub initCmd {
     DEBUG($DEBUG_LOW, "initCmd()");
 
     # prepare fool dir if necessary
@@ -687,7 +773,7 @@ sub initCmd() {
 
 
 # create new issue
-sub newCmd() {  # new [-c|-p] <title>
+sub newCmd {  # new [-c|-p] <title>
     DEBUG($DEBUG_LOW, "newCmd()");
     my @arguments = @_;
 
@@ -701,16 +787,13 @@ sub newCmd() {  # new [-c|-p] <title>
 
     # reading latest issue value from file (file contains only this one line!)
     my @userFileContent = readFile($userFile);
-    my $userIssueValue  = $userFileContent[0];
-    my $userMilestone   = $userFileContent[1];
-
-    if ($userIssueValue !~ /^[0-9]+$/) {
+    if ($userFileContent[$USER_FILE_ISSUE_COUNTER] !~ /^\d+$/) {
         EXIT(255, "$userFile contains invalid latest value!");
     }
-    $userIssueValue++; # increment for current issue
+    $userFileContent[$USER_FILE_ISSUE_COUNTER]++; # increment for current issue
 
     # reading milestone value from file (file contains only this one line!)
-    if (!$userMilestone) {
+    if (!$userFileContent[$USER_FILE_MILESTONE]) {
         EXIT(255, "$userFile contains invalid milestone value!");
     }
 
@@ -719,11 +802,11 @@ sub newCmd() {  # new [-c|-p] <title>
 
     if ($arguments[0] eq "-c" || $arguments[0] eq "-p") {
         # reading milestrom from user input
-        printf("Milestone [$userMilestone]: ");     # pressing just [ENTER] doesn't change default milestone
+        printf("Milestone [$userFileContent[$USER_FILE_MILESTONE]]: ");     # pressing just [ENTER] doesn't change default milestone
         my $newMilestone = <STDIN>;         # read new milestone
         normalizeString($newMilestone);     # make a clean string out of it
         if ($newMilestone) {
-            $userMilestone = $newMilestone;
+            $userFileContent[$USER_FILE_MILESTONE] = $newMilestone;
         }
 
         # reading issue type from user input
@@ -742,7 +825,7 @@ sub newCmd() {  # new [-c|-p] <title>
 
             my $newIssueType = <STDIN>;
             CHOMP($newIssueType);
-            if ($newIssueType =~ /^[0-9]+$/ && $newIssueType >= 0 && $newIssueType < scalar(keys(%ISSUE_TYPES))) {      # valid user input
+            if ($newIssueType =~ /^\d+$/ && $newIssueType >= 0 && $newIssueType < scalar(keys(%ISSUE_TYPES))) {      # valid user input
                 $issueType = $newIssueType;
                 last;
             }
@@ -758,26 +841,61 @@ sub newCmd() {  # new [-c|-p] <title>
         if ($arguments[0] eq "-c") {
             prepareEditor();
             $tempFile = getFileName($FILE_NAME_TEMP);
-            system("echo -n > $tempFile");      # ensure that .fool/<user>/.temp exists and is empty!
+            createFile($tempFile);              # ensure that .fool/<user>/.temp exists and is empty!
             system("$editor $tempFile");        # open editor to edit temp file
         }
 
         shift(@arguments);      # remove cmd from arguments list because rest is the issue title
     }
+    my $issueTypeText = $ISSUE_TYPES{$issueType};
 
     my $title = join(" ", @arguments);  # create title out of the rest of given arguments
     normalizeString($title);
-    
-    if (!(length($title))) {
+
+    if (!(length($title))) {    # after normalization it's possible that given title is empty, e.g. if sth. like '""""""' was given
         EXIT(255, "title cannot be empty!");
     }
 
-    createNewIssue($userIssueValue, $ISSUE_TYPES{$issueType}, $userMilestone, $title, $tempFile);
+
+    # prepare necessary user strings
+    prepareEmail(1);
+    prepareUserName(1);
+    prepareCheckout(1);
+
+    # if exists read comment file to be handled when comment/HISTORY file is written
+    my %tagHash = ();
+    if ($tempFile && -s $tempFile) {
+        %tagHash = readTaggedFile($tempFile);
+    }
+
+    # create comment/history file
+    if (!$tagHash{$HISTORY_FILE_SECTIONS{$HISTORY_FILE_SECTION_HISTORY}}) {
+        $tagHash{$HISTORY_FILE_SECTIONS{$HISTORY_FILE_SECTION_HISTORY}} = [];
+    }
+
+    # now write current issue file (with comments and HISTORY)
+    addHistory($HISTORY_TOKEN_CREATED, \%tagHash);
+    my ($currentIssueFileName, $currentIssueFile) = getFileName($FILE_NAME_CURRENT_ISSUE, $userFileContent[$USER_FILE_ISSUE_COUNTER]);
+    writeTaggedFile($currentIssueFile, \%tagHash);
+
+    # comment file content has been written into history file so we can delete it now
+    if ($tempFile && -s $tempFile) {
+        unlink($tempFile);
+    }
+
+    # user info
+    printf("created issue ".$currentIssueFileName);
+
+    # update .fool/<user>/<email> file
+    writeFile($userFile, \@userFileContent);
+
+    # write issue into issues file
+    appendFile($issuesFile, [createIssueEntry(getCurrentIssueTag($userFileContent[$USER_FILE_ISSUE_COUNTER]), $issueTypeText, $ISSUE_STATES{"open"}, $userFileContent[$USER_FILE_MILESTONE], $title)]);
 }
 
 
-# create new issue
-sub grepCmd() {   # grep [-l] [<pattern>]
+# search for certain issues
+sub grepCmd {   # grep [-l] [<patterns>]
     DEBUG($DEBUG_LOW, "grepCmd()");
     my @arguments = @_;
 
@@ -820,8 +938,8 @@ sub grepCmd() {   # grep [-l] [<pattern>]
 }
 
 
-# create new issue
-sub lsCmd() { # ls [<issue>]
+# list issue(s)
+sub lsCmd { # ls [<issue>]
     DEBUG($DEBUG_LOW, "lsCmd()");
     my @arguments = @_;
 
@@ -851,13 +969,13 @@ sub lsCmd() { # ls [<issue>]
             return;
         }
     }
-    
+
     printf("given issue [$arguments[0]] couldn't be matched\n");
 }
 
 
-# create new issue
-sub editCmd() { # edit <issue>
+# edit existing issue
+sub editCmd { # edit <issue>
     DEBUG($DEBUG_LOW, "editCmd()");
     my @arguments = @_;
 
@@ -866,11 +984,8 @@ sub editCmd() { # edit <issue>
         $cmd{"help"}->("'git-fool edit' parameters mismatch", 255);
     }
 
-    # test if init has already be done
-    testFoolDir();
-    
-    # prepare user directory if necessary because we need it for the temp file
-    prepareUserDir();
+    testFoolDir();      # check if .fool directory exists (if not init hasn't be called yet!)
+    prepareUserDir();   # prepare user directory if necessary because we need it for the temp file
 
     # read issues file
     my @issuesFileContent = readFile($issuesFile);
@@ -915,7 +1030,7 @@ sub editCmd() { # edit <issue>
             printf("changed\n");    # @todo: rauswerfen!
         }
 
-        # reading milestrom from user input
+        # reading milestone from user input
         printf("Milestone [$milestone]: ");     # pressing just [ENTER] doesn't change default milestone
         my $newMilestone = <STDIN>;   # read new milestone
         CHOMP($newMilestone);
@@ -947,10 +1062,10 @@ sub editCmd() { # edit <issue>
                     printf(" [$issueType]: ");  # print default option if user presses just [ENTER]
                 }
             }
-        
+
             my $newIssueType = <STDIN>;
             CHOMP($newIssueType);
-            if ($newIssueType =~ /^[0-9]+$/ && $newIssueType >= 0 && $newIssueType < scalar(keys(%ISSUE_TYPES))) {      # valid user input
+            if ($newIssueType =~ /^\d+$/ && $newIssueType >= 0 && $newIssueType < scalar(keys(%ISSUE_TYPES))) {      # valid user input
                 $issueType = $newIssueType;
                 $issueChanged = 1;
                 printf("changed\n");    # @todo: rauswerfen!
@@ -964,59 +1079,39 @@ sub editCmd() { # edit <issue>
             }
         }
 
-        # read tagged file
-        my ($currentIssueFileName, $currentIssueFile) = getFileName($FILE_NAME_CERTAIN_ISSUE, $id, $userName, $email);
-
-        # update issues array
+        # update issues array and write back issues file if necessary
         if ($issueChanged) {
-            $issuesFileContent[$lineIndex] = createIssueEntry(getCurrentIssueTag($id), $ISSUE_TYPES{$issueType}, $state, $milestone, $title);
+            $issuesFileContent[$lineIndex] = createIssueEntry(getIssueTag($id, $userName, $email), $ISSUE_TYPES{$issueType}, $state, $milestone, $title);
             writeFile($issuesFile, \@issuesFileContent);
         }
 
-        
-        
-        
+        # read tagged file
+        my ($certainIssueFileName, $certainIssueFile) = getFileName($FILE_NAME_CERTAIN_ISSUE, $id, $userName, $email);
 
+        my %tagHash = ();
+        if ($certainIssueFile && -s $certainIssueFile) {
+            %tagHash = readTaggedFile($certainIssueFile);
+        }
+        else {
+            EXIT(255, "no comment/history file found: $certainIssueFile");      # @todo: evtl. autorepair hier aufrufen?
+        }
 
-#hier gehts weiter..........
-#        xxxxxxxxxxx
-#        readfile
-#        create temp file
-#        after change read temp file
-#        beide none sections vergleichen        -> $issueChanged = 1;
-#        beide files zusammenhängen
-#        file überschreiben
+        # write temp file for beeing edited
+        my ($tempFileName, $tempFile) = getFileName($FILE_NAME_TEMP);
+        writeFile($tempFile, $tagHash{"none"});
 
+        prepareEditor();
+        system("$editor $tempFile");        # open editor to edit temp file
 
-#        my %tagHash = ();
-#        if ($commentFile && -s $commentFile) {
-#            %tagHash = readTaggedFile($commentFile);
-#            system("rm $commentFile");
-#        }
-#    
-#    
-#    
-#        my ($currentIssueFileName, $currentIssueFile) = getFileName($FILE_NAME_CURRENT_ISSUE, $issueValue);
-#        writeTaggedFile($currentIssueFile, \%tagHash);
-#    
-#    
-#    
-#        # write issue into issues file
-#        system("echo \"".createIssueEntry(getCurrentIssueTag($issueValue), $issueType, "open", $milestone, $title)."\" >> $issuesFile");
-#                                
+        my @newComments = readFile($tempFile);
 
-
-
-
-
-#        prepareEditor();
-#        $tempFile = getFileName($FILE_NAME_TEMP);
-#        system("echo -n > $tempFile");      # ensure that .fool/<user>/.temp exists and is empty!
-#        system("$editor $tempFile");        # open editor to edit temp file
-
-
-
-
+        # if anything has been changed recreate comment/history file
+        if (!arraysEqual($tagHash{"none"}, \@newComments) || $issueChanged) {
+            $tagHash{"none"} = \@newComments;
+            addHistory($HISTORY_TOKEN_CHANGED, \%tagHash);
+            writeTaggedFile($certainIssueFile, \%tagHash);
+        }
+        unlink($tempFile);
     }
     else {
         EXIT(255, "found damaged line in issue file: [$line]");
@@ -1024,38 +1119,119 @@ sub editCmd() { # edit <issue>
 }
 
 
-# create new issue
-sub cpCmd() {   # cp <issue>
+# copy existing issue
+sub cpCmd {   # cp <issue>
     DEBUG($DEBUG_LOW, "cpCmd()");
+    my @arguments = @_;
+
+    # check command arguments
+    if (@arguments != 1) {
+        $cmd{"help"}->("'git-fool cp' parameters mismatch", 255);
+    }
+
+    # check if .fool directory exists (if not init hasn't be called yet!)
+    testFoolDir();
+
+    # read issues file
+    my @issuesFileContent = readFile($issuesFile);
+
+    # search for given issue in issue file
+    my $lineIndex;
+    for ($lineIndex = 0; $lineIndex<@issuesFileContent; $lineIndex++) {
+        if ($issuesFileContent[$lineIndex] =~ /^$arguments[0]/) {
+            last;   # finish if line matches
+        }
+    }
+    if ($lineIndex == @issuesFileContent) {
+        printf("given issue doesn't exist!");
+        return;
+    }
+
+    # prepare user directory if necessary because we need it for the issue's user id
+    prepareUserDir();
+
+    # reading latest issue value from file (file contains only this one line!)
+    my @userFileContent = readFile($userFile);
+
+    if ($userFileContent[$USER_FILE_ISSUE_COUNTER] !~ /^\d+$/) {
+        EXIT(255, "$userFile contains invalid latest value!");
+    }
+    $userFileContent[$USER_FILE_ISSUE_COUNTER]++; # increment for current issue
+
+    # reading milestone value from file (file contains only this one line!)
+    if (!$userFileContent[$USER_FILE_MILESTONE]) {
+        EXIT(255, "$userFile contains invalid milestone value!");
+    }
+
+    # prepare necessary strings (for HISTORY because for the issue we take all information from the issue itself otherwise a user cannot change an issue from another sb. else!)
+    prepareEmail(1);
+    prepareUserName(1);
+    prepareCheckout(1);
+
+    # now scan and handle line
+    my $line = $issuesFileContent[$lineIndex];
+    if ($line =~ /^([^\/]+)\/([^\/]+)\/([^\/]+)\/([^\/]+)\/([^\/]+)\/([^\/]+)\/(.+)$/) {
+        # process with line elements
+        my ($issueValue, $issueUserName, $issueEmail, $issueType, $state, $issueMilestone, $title) = ($1, $2, $3, $4, $5, $6, $7);
+
+        # update .fool/<user>/<email> file
+        writeFile($userFile, \@userFileContent);
+
+        # write issue into issues file (id, user name, email will be set to current user, state will be set to open and current default milestone will be used!)
+        appendFile($issuesFile, [createIssueEntry(getIssueTag($userFileContent[$USER_FILE_ISSUE_COUNTER], $userName, $email), $issueType, $ISSUE_STATES{"open"}, $userFileContent[$USER_FILE_MILESTONE], $title)]);
+
+        # read history file from original issue
+        my ($certainIssueFileName, $certainIssueFile) = getFileName($FILE_NAME_CERTAIN_ISSUE, $issueValue, $issueUserName, $issueEmail);
+        my %tagHash = ();
+        if ($certainIssueFile && -s $certainIssueFile) {
+            %tagHash = readTaggedFile($certainIssueFile);
+        }
+        else {
+            EXIT(255, "no comment/history file found: $certainIssueFile");      # @todo: evtl. autorepair hier aufrufen?
+        }
+
+        # replace original [HISTORY] section
+        $tagHash{$HISTORY_FILE_SECTIONS{$HISTORY_FILE_SECTION_HISTORY}} = [];
+        addHistory($HISTORY_TOKEN_COPIED, \%tagHash, "from ".getIssueTag($issueValue, $issueUserName, $issueEmail));
+
+        # write history file of new issue
+        my ($currentIssueFileName, $currentIssueFile) = getFileName($FILE_NAME_CURRENT_ISSUE, $userFileContent[$USER_FILE_ISSUE_COUNTER]);
+        writeTaggedFile($currentIssueFile, \%tagHash);
+
+        editCmd($userFileContent[$USER_FILE_ISSUE_COUNTER]);
+    }
+    else {
+        EXIT(255, "found damaged line in issue file: [$line]");
+    }
 }
 
 
-# create new issue
-sub closeCmd() {    # close <issue>
+# change issue state to closed
+sub closeCmd {    # close <issue>
     DEBUG($DEBUG_LOW, "closeCmd()");
 }
 
 
-# create new issue
-sub reopenCmd() {   # open <issue>
+# reopen an already closed issue again
+sub reopenCmd {   # open <issue>
     DEBUG($DEBUG_LOW, "reopenCmd()");
 }
 
 
-# create new issue
-sub rmCmd() {   # rm <issue>
+# remove existing issue
+sub rmCmd {   # rm <issue>
     DEBUG($DEBUG_LOW, "rmCmd()");
 }
 
 
-# create new issue
-sub milestone() {   # milestone [[-u] <text>]
+# change default milestone or update milestones from existing issues
+sub milestone {   # milestone | milestone [-u <old>] <mlst>
     DEBUG($DEBUG_LOW, "milestone()");
 }
 
 
 # print help screen
-sub helpCmd() { # help
+sub helpCmd { # help
     DEBUG($DEBUG_LOW, "helpCmd()");
     my ($error, $exitCode) = @_;
 
@@ -1101,7 +1277,7 @@ sub helpCmd() { # help
 
 
 # just for testing...
-sub dummyCmd() {
+sub dummyCmd {
     DEBUG($DEBUG_MED, "dummyCmd()");
 
 
