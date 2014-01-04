@@ -94,7 +94,7 @@ my $HISTORY_FILE_SECTION_HISTORY = 1;
 my %HISTORY_FILE_SECTIONS = ( $HISTORY_FILE_SECTION_NONE      =>  "none",
                               $HISTORY_FILE_SECTION_HISTORY   =>  "[HISTORY]",
                            );
-       
+
 
 
 # define history tokens
@@ -160,6 +160,18 @@ sub arraysEqual($$) {
 sub CHOMP(\$) {
     my ($stringRef) = @_;
     ${$stringRef} =~ s/[\x0A\x0D]+$//;
+}
+
+
+# usually used with title where not all characters are possible
+sub normalizeString(\$) {
+    my ($titleRef) = @_;
+
+    CHOMP($titleRef);
+    ${$titleRef} =~ s/[\x00-\x1F\x7F]//g;   # replace not allowed characters from string
+    ${$titleRef} =~ s/(^(\")+|(\")+$)//g;   # replace quotation mark at beginning and end of the string
+    ${$titleRef} =~ s/\//_/g;               # slash (/) is not allowed inside e.g. the title so replace all of them by underscore (_)
+
 }
 
 
@@ -577,9 +589,9 @@ sub appendFile($$) {
 # creates an empty file, an existing one will be overwritten
 sub createFile($) {
     DEBUG($DEBUG_MED, "createFile()");
-    
+
     my ($fileName) = @_;
-    
+
     writeFile($fileName, []);
 }
 
@@ -676,65 +688,143 @@ sub shortenString($$) {
 }
 
 
-#
+# print one issue to screen (short, medium or long version)
 sub printIssue($$$) {
     DEBUG($DEBUG_MED, "printIssue()");
-    my ($line, $long, $alreadyWritten) = @_;
+    my ($line, $printSize, $isFirstLine) = @_;
+
+    my $ISSUE_LENGTH     = 12;      # only used for short, for medium and long it's uncut
+    my $TYPE_LENGTH      =  4;      # only used for short and medium, for long it's uncut
+    my $STATE_LENGTH     =  6;      # only used for short and medium, for long it's uncut
+    my $MILESTONE_LENGTH = 10;      # only used for short and medium, for long it's uncut
+
+    my $BETWEEN_GAPS     =  2;      # spaces between the columns
+    my $MEDIUM_PRE_GAP   =  5;      # spaces in front of title in medium case
+
+    my $MEDIUM_TITLE     = 80 - (                $TYPE_LENGTH + $STATE_LENGTH + $MILESTONE_LENGTH + 3*$BETWEEN_GAPS + $MEDIUM_PRE_GAP);     # left for short  title if screen widht = 80
+    my $SHORT_TITLE      = 80 - ($ISSUE_LENGTH + $TYPE_LENGTH + $STATE_LENGTH + $MILESTONE_LENGTH + 4*$BETWEEN_GAPS                  );     # left for medium title if screen widht = 80
 
     my ($wchar, $hchar, $wpixels, $hpixels) = GetTerminalSize();
 
-    # some variables to make later changes little bit easier!
-    my $milestoneLength   = 9;
-    my $idLength          = 6;
-    my $userNameLength    = 10;         # @todo: da es evtl. nervt, wenn der username nicht vollständig angezeigt wird, das auf ein git config element legen!
-    my $defaultTileLength = 35;
-    my $maxTitleLength    = $wchar - 50; # depends on window size
-    if ($maxTitleLength < 10) {
-        $maxTitleLength = $defaultTileLength;   # if window is too small for printing the title ignore window size and print the whole title
-    }
+
+    # printSize: 0=short, 1=medium, 2=long
+    #
+    # short:
+    # 12345678901234567890123456789012345678901234567890123456789012345678901234567890
+    # ISSUE         TITLE                                      TYPE  STATE   MILESTONE
+    # --------------------------------------------------------------------------------
+    # 3/FOOBARM...  that's a new one                           Bug   open    1.2
+    # 3/3DES        that's another one                         Bug   closed  0.1
+    # 4/3DES        and this one has such an enormous long...  Task  open    0.3
+    # \__________|xx\_______________________________________|xx\__|xx\____|xx\_______|
+    #            |                                          |     |       |          |
+    #            |                                          |     |       |           ------- milestone length is 9 characters if it is longer it will be truncated
+    #            |                                          |     |        ------------------ state length is 6 characters if it is longer it will be truncated
+    #            |                                          |      -------------------------- type length is 4 characters if it is longer it will be truncated
+    #            |                                           -------------------------------- everything that is left will be used for title if it is longer it will be shortened
+    #            |                                                                              if screen is larger than 80 characters title will get the extra size
+    #             --------------------------------------------------------------------------- short issue tag (without email) length is 12 characters if it is longer it will be shortened
+    #
+    #
+    # medium:
+    # 12345678901234567890123456789012345678901234567890123456789012345678901234567890
+    # ISSUE/TITLE                                              TYPE  STATE   MILESTONE
+    # --------------------------------------------------------------------------------
+    # 3/FOOBARMUCHTOOLONG/gitx@74th.de                                                        issue tag gets its own line and will not be shortend, in no case, if it is longer it will be wrapped in the next line
+    #      that's a new one                                    Bug   open    1.2
+    # 3/3DES/git@74th.de
+    #      that's another one                                  Bug   closed  0.1
+    # 4/3DES/git@74th.de
+    #      and this one has such an enormous long...           Task  open    0.3
+    # xxxxx\________________________________________________|xx\__|xx\____|xx\_______|
+    #                                                       |     |       |          |
+    #                                                       |     |       |           ------- milestone length is 9 characters if it is longer it will be truncated
+    #                                                       |     |        ------------------ state length is 6 characters if it is longer it will be truncated
+    #                                                       |      -------------------------- type length is 4 characters if it is longer it will be truncated
+    #                                                        -------------------------------- everything that is left will be used for title if it is longer it will be shortened
+    #                                                                                           if screen is larger than 80 characters title will get the extra size
+    #
+    #
+    # large:
+    # 12345678901234567890123456789012345678901234567890123456789012345678901234567890
+    # ISSUE     : 3/FOOBARMUCHTOOLONG/gitx@74th.de                                            all entries are printed unshortened, if they are longer they will be wrapped in the next line
+    # TITLE     : that's a new one
+    # TYPE      : Bug
+    # STATE     : open
+    # MILESTONE : 1.2
+    #
+    # [HISTORY]
+    # created: CET, Do Jan  2 19:54:03 2014 at 7411ba78e8e9519a970612929dc914da81f51108
 
     # issue line has to be printed
     if ($line =~ /^([^\/]+)\/([^\/]+)\/([^\/]+)\/([^\/]+)\/([^\/]+)\/([^\/]+)\/(.+)$/) {
         # process with line elements
-        my ($id, $userName, $email, $issueType, $state, $milestone, $title) = ($1, $2, $3, $4, $5, $6, $7);
+        my ($issueNr, $issueUserName, $issueEmail, $issueType, $issueState, $issueMilestone, $issueTitle) = ($1, $2, $3, $4, $5, $6, $7);
+        my $shortIssueTag = getShortIssueTag($issueNr, $issueUserName);
+        my $issueTag      = getIssueTag($issueNr, $issueUserName, $issueEmail);
 
-        # do some string formattings (to shorten the output to screen width if not option -l is used!)
-        my $userNamePrepared  =      shortenString($userName,           $userNameLength);
-        my $titlePrepared     = "\"".shortenString($title,              $maxTitleLength-2)     ."\"";      # -2 because of the quotation marks "<text>"
-        my $issueTypePrepared =      shortenString($issueType,          $ISSUE_TYPES_LENGTH);
-        my $statePrepared     =      shortenString($state,              $ISSUE_STATES_LENGTH);
-        my $milestonePrepared = "\"".shortenString($milestone,          $milestoneLength-2)    ."\"";      # -2 because of the brackets [<MLST>]
-
-        # now print the stuff
-        if (!$long) {   # print each issue into one line as long as the window is not too smal otherwise line will be printed uncut (see calculation of $maxTitleLength)
-            # if not -l print a header line
-            if (!$alreadyWritten) {
-                printf("%-".($idLength+$userNameLength+1)."s %-".$maxTitleLength."s %-".$ISSUE_TYPES_LENGTH."s %-".$ISSUE_STATES_LENGTH."s %s\n", "ISSUE", "TITLE", "TYPE", "STATE", "MILESTONE");
-                printf(("-" x (45+$maxTitleLength))."\n");
-            }
-
-            printf("%-".($idLength+$userNameLength+1)."s %-".$maxTitleLength."s %-".$ISSUE_TYPES_LENGTH."s %-".$ISSUE_STATES_LENGTH."s %s\n", getShortIssueTag($id, $userNamePrepared), $titlePrepared, $issueTypePrepared, $statePrepared, $milestonePrepared);
-        }
-        else {          # if -l parameter is given the issue line is printed uncut in any case
+        # print long version
+        if ($printSize == 2) {  # 0=short, 1=medium, 2=long
             # if this is not the first line to be printed print a ############### separator line
-            if ($alreadyWritten) {
-                printf(("#" x (45+$maxTitleLength))."\n\n");
+            if (!$isFirstLine) {
+                printf(("#" x $wchar)."\n\n");
             }
 
             # now print header line
-            printf("Issue     : %s\n".
-                   "Title     : %s\n".
-                   "Type      : %s\n".
-                   "State     : %s\n".
-                   "Milestone : %s\n\n", getIssueTag($id, $userName, $email), $title, $issueType, $state, $milestone);
+            printf("ISSUE     : %s\n".
+                   "TITLE     : %s\n".
+                   "TYPE      : %s\n".
+                   "STATE     : %s\n".
+                   "MILESTONE : %s\n\n", $issueTag, $issueTitle, $issueType, $issueState, $issueMilestone);
 
-            # now try to print the comment/HISTORY file
-            my $certainIssueFile   = getFileName($FILE_NAME_CERTAIN_ISSUE, $id, $userName, $email);
-
+            # now try to print the comment&HISTORY file
+            my $certainIssueFile   = getFileName($FILE_NAME_CERTAIN_ISSUE, $issueNr, $issueUserName, $issueEmail);
             my @commentHistoryFile = readFile($certainIssueFile);
             foreach my $line (@commentHistoryFile) {
                 printf("$line\n");
             }
+
+            return;
+        }
+
+        # print medium version
+        if ($printSize == 1) {  # 0=short, 1=medium, 2=long
+            ($MEDIUM_TITLE += $wchar - 80) if ($wchar > 80);     # if screen is smaller than 80 characters don't recalulate title length... it will be wrapped then!
+
+            # if first line print the header
+            if ($isFirstLine) {
+                printf("%-".($MEDIUM_TITLE + $MEDIUM_PRE_GAP + $BETWEEN_GAPS)."s%-".($TYPE_LENGTH + $BETWEEN_GAPS)."s%-".($STATE_LENGTH + $BETWEEN_GAPS)."s%s\n", "ISSUE/TITLE", "TYPE", "STATE", "MILESTONE");
+                printf(("-" x $wchar)."\n");
+            }
+
+            # now shorten the title to a propper length
+            my $issueTitle = shortenString($issueTitle, $MEDIUM_TITLE);
+
+            # at least print the issue (first line = issue tag, second line = rest)
+            printf("%s\n", $issueTag);
+            printf((" " x $MEDIUM_PRE_GAP)."%-".($MEDIUM_TITLE+$BETWEEN_GAPS)."s%-".($TYPE_LENGTH+$BETWEEN_GAPS)."s%-".($STATE_LENGTH+$BETWEEN_GAPS)."s%s\n\n", $issueTitle, $issueType, $issueState, $issueMilestone);
+
+            return;
+        }
+
+        # print short version
+        if ($printSize == 0) {  # 0=short, 1=medium, 2=long
+            ($SHORT_TITLE += $wchar - 80) if ($wchar > 80);     # if screen is smaller than 80 characters don't recalulate title length... it will be wrapped then!
+
+            # if first line print the header
+            if ($isFirstLine) {
+                printf("%-".($ISSUE_LENGTH + $BETWEEN_GAPS)."s%-".($SHORT_TITLE + $BETWEEN_GAPS)."s%-".($TYPE_LENGTH + $BETWEEN_GAPS)."s%-".($STATE_LENGTH + $BETWEEN_GAPS)."s%s\n", "ISSUE", "TITLE", "TYPE", "STATE", "MILESTONE");
+                printf(("-" x $wchar)."\n");
+            }
+
+            # now shorten some variables to a propper length
+            my $issueTitle    = shortenString($issueTitle,    $SHORT_TITLE);
+            my $shortIssueTag = shortenString($shortIssueTag, $ISSUE_LENGTH);
+
+            # at least print the issue (first line = issue tag, second line = rest)
+            printf("%-".($ISSUE_LENGTH + $BETWEEN_GAPS)."s%-".($SHORT_TITLE + $BETWEEN_GAPS)."s%-".($TYPE_LENGTH + $BETWEEN_GAPS)."s%-".($STATE_LENGTH + $BETWEEN_GAPS)."s%s\n", $shortIssueTag, $issueTitle, $issueType, $issueState, $issueMilestone);
+
+            return;
         }
     }
     else {
@@ -743,16 +833,46 @@ sub printIssue($$$) {
 }
 
 
-#
-sub normalizeString(\$) {
-    my ($titleRef) = @_;
+# prints issues from issues list and uses an index list to select those items to be printed
+sub printIndexedIssueList {
+    DEBUG($DEBUG_MED, "printIndexedIssueList()");
+    my ($issuesFileContentRef, $foundListRef, $printSize) = @_;
 
-    CHOMP($titleRef);
-    ${$titleRef} =~ s/[\x00-\x1F\x7F]//g;   # replace not allowed characters from string
-    ${$titleRef} =~ s/(^(\")+|(\")+$)//g;   # replace quotation mark at beginning and end of the string
-    ${$titleRef} =~ s/\//_/g;               # slash (/) is not allowed inside e.g. the title so replace all of them by underscore (_)
-
+    my $isFirstLine = 1;
+    foreach my $index (@{$foundListRef}) {
+        my $line = ${$issuesFileContentRef}[$index];
+        printIssue($line, $printSize, $isFirstLine);
+        $isFirstLine = 0;
+    }
 }
+
+
+# returns an array with indices (if pattern list is empty a match with all lines will be faked)
+sub matchPatterns {
+    DEBUG($DEBUG_MED, "matchPatterns()");
+    my ($listRef, $patternListRef) = @_;
+
+    return [0..scalar(@{$listRef})-1] if (!scalar(@{$patternListRef}));
+
+    my @foundIndices = ();
+
+    # now handle all issues' lines
+    for (my $index = 0; $index < scalar(@{$listRef}); $index++) {   # all elements
+        my $patternFound = 1;
+        foreach my $pattern (@{$patternListRef}) {                 # try to match all given patterns if one doesn't match ignore current element
+            if (${$listRef}[$index] !~ /$pattern/) {
+                $patternFound = 0;
+                last;
+            }
+        }
+        next unless ($patternFound);    # if no pattern matched continue with next line...
+
+        push(@foundIndices, $index);
+    }
+
+    return [@foundIndices];
+}
+
 
 
 
@@ -785,7 +905,7 @@ sub newCmd {  # new [-c|-p] <title>
     testFoolDir();      # check if .fool directory exists (if not init hasn't be called yet!)
     prepareUserDir();   # may be we have to create the user directory if this is the first time current user calls 'new' command
 
-    # reading latest issue value from file (file contains only this one line!)
+    # reading latest issue value and milestone from user file
     my @userFileContent = readFile($userFile);
     if ($userFileContent[$USER_FILE_ISSUE_COUNTER] !~ /^\d+$/) {
         EXIT(255, "$userFile contains invalid latest value!");
@@ -895,15 +1015,19 @@ sub newCmd {  # new [-c|-p] <title>
 
 
 # search for certain issues
-sub grepCmd {   # grep [-l] [<patterns>]
+sub grepCmd {   # grep [-m|-l] [<patterns>]
     DEBUG($DEBUG_LOW, "grepCmd()");
     my @arguments = @_;
 
-    my $long = 0;
+    my $printSize = 0;  # 0=short, 1=medium, 2=long
 
     # check command arguments
-    if (@arguments && $arguments[0] eq "-l") {
-        $long = 1;
+    if (@arguments && $arguments[0] eq "-m") {
+        $printSize = 1;
+        shift(@arguments);
+    }
+    elsif (@arguments && $arguments[0] eq "-l") {
+        $printSize = 2;
         shift(@arguments);
     }
 
@@ -917,39 +1041,34 @@ sub grepCmd {   # grep [-l] [<patterns>]
         return;
     }
 
-    # now handle all issues' lines
-    my $alreadyWritten = 0;
-    foreach my $line (@issuesFileContent) {
-        # if <patterns> are given we have to match...
-        my $patternFound = 1;
-        if (@arguments) {
-            foreach my $pattern (@arguments) {
-                if ($line !~ /$pattern/) {
-                    $patternFound = 0;
-                    last;
-                }
-            }
-            next unless ($patternFound);    # if no pattern matched continue with next line...
-        }
+    # find candidates
+    my $foundListRef = matchPatterns(\@issuesFileContent, \@arguments);
 
-        printIssue($line, $long, $alreadyWritten);
-        $alreadyWritten = 1;
-    }
+    # now print them
+    printIndexedIssueList(\@issuesFileContent, $foundListRef, $printSize);
 }
 
 
 # list issue(s)
-sub lsCmd { # ls [<issue>]
+sub lsCmd { # ls [-m|-l] [<issue>]
     DEBUG($DEBUG_LOW, "lsCmd()");
     my @arguments = @_;
 
     # check command arguments
-    if (@arguments > 1) {
+    if (@arguments > 2) {
         $cmd{"help"}->("'git-fool ls' parameters mismatch", 255);
     }
-    if (!@arguments) {
-        grepCmd();
-        return;
+
+    my $printSize = 0;  # 0=short, 1=medium, 2=long
+
+    # check command arguments
+    if (@arguments && $arguments[0] eq "-m") {
+        $printSize = 1;
+        shift(@arguments);
+    }
+    elsif (@arguments && $arguments[0] eq "-l") {
+        $printSize = 2;
+        shift(@arguments);
     }
 
     # test if init has already be done
@@ -962,15 +1081,16 @@ sub lsCmd { # ls [<issue>]
         return;
     }
 
-    # search and if found handle issue
-    foreach my $line (@issuesFileContent) {
-        if ($line =~ /^$arguments[0]/) {
-            printIssue($line, 1, 0);
-            return;
-        }
+    # find candidates
+    my $foundListRef = matchPatterns(\@issuesFileContent, scalar(@arguments) ? ["^$arguments[0]"] : []);
+
+    # if only one element found print it always long
+    if (scalar(@{$foundListRef}) == 1) {
+        $printSize = 2;
     }
 
-    printf("given issue [$arguments[0]] couldn't be matched\n");
+    # now print them
+    printIndexedIssueList(\@issuesFileContent, $foundListRef, $printSize);
 }
 
 
@@ -985,30 +1105,41 @@ sub editCmd { # edit <issue>
     }
 
     testFoolDir();      # check if .fool directory exists (if not init hasn't be called yet!)
-    prepareUserDir();   # prepare user directory if necessary because we need it for the temp file
 
     # read issues file
     my @issuesFileContent = readFile($issuesFile);
+    if (!@issuesFileContent) {
+        printf("issue file is empty!\n");
+        return;
+    }
+
+    # find candidates
+    my $foundListRef = matchPatterns(\@issuesFileContent, scalar(@arguments) ? ["^$arguments[0]"] : []);
+
+    # if only one element found print it always long
+    if (scalar(@{$foundListRef}) == 0) {
+        EXIT(255, "given issue not found");
+    }
+    elsif(scalar(@{$foundListRef}) > 1) {
+        printf("error : more than one issue matches, please restrict search\n\n");
+        printIndexedIssueList(\@issuesFileContent, $foundListRef, 0);
+        EXIT(255);
+    }
+
+    # now take the only candidate
+    my $lineIndex = ${$foundListRef}[0];
+
+    # prepare user directory if necessary because we need it for the temp file
+    prepareUserDir();
 
     # prepare necessary strings (for HISTORY because for the issue we take all information from the issue itself otherwise a user cannot change an issue from another sb. else!)
     prepareEmail(1);
     prepareUserName(1);
     prepareCheckout(1);
 
-    # search for given issue in issue file
-    my $lineIndex;
-    for ($lineIndex = 0; $lineIndex<@issuesFileContent; $lineIndex++) {
-        if ($issuesFileContent[$lineIndex] =~ /^$arguments[0]/) {
-            last;   # finish if line matches
-        }
-    }
-    if ($lineIndex == @issuesFileContent) {
-        printf("given issue doesn't exist!");
-        return;
-    }
-
     # print issue to screen
-    printIssue($issuesFileContent[$lineIndex], 0, 0);
+    printf("edit...\n");
+    printIssue($issuesFileContent[$lineIndex], 0, 1);
     printf("\n");
 
     # set to 1 if anything of the issue has been changed!
@@ -1020,8 +1151,12 @@ sub editCmd { # edit <issue>
         # process with line elements
         my ($id, $userName, $email, $issueType, $state, $milestone, $title) = ($1, $2, $3, $4, $5, $6, $7);
 
+        if ($state eq $ISSUE_STATES{"closed"}) {
+            EXIT(255, "issue is closed, reopen it for editing");
+        }
+
         # reading new title from user input
-        printf("Title [$title]:\n");    # pressing just [ENTER] doesn't change original title
+        printf("Title [$title]: ");    # pressing just [ENTER] doesn't change original title
         my $newTitle = <STDIN>;         # read new title
         normalizeString($newTitle);
         if (length($newTitle)) {
@@ -1093,7 +1228,7 @@ sub editCmd { # edit <issue>
             %tagHash = readTaggedFile($certainIssueFile);
         }
         else {
-            EXIT(255, "no comment/history file found: $certainIssueFile");      # @todo: evtl. autorepair hier aufrufen?
+            EXIT(255, "changed but no comment/history file found: $certainIssueFile");      # @todo: evtl. autorepair hier aufrufen?
         }
 
         # write temp file for beeing edited
@@ -1134,25 +1269,36 @@ sub cpCmd {   # cp <issue>
 
     # read issues file
     my @issuesFileContent = readFile($issuesFile);
-
-    # search for given issue in issue file
-    my $lineIndex;
-    for ($lineIndex = 0; $lineIndex<@issuesFileContent; $lineIndex++) {
-        if ($issuesFileContent[$lineIndex] =~ /^$arguments[0]/) {
-            last;   # finish if line matches
-        }
-    }
-    if ($lineIndex == @issuesFileContent) {
-        printf("given issue doesn't exist!");
+    if (!@issuesFileContent) {
+        printf("issue file is empty!\n");
         return;
     }
+
+    # find candidates
+    my $foundListRef = matchPatterns(\@issuesFileContent, scalar(@arguments) ? ["^$arguments[0]"] : []);
+
+    # if only one element found print it always long
+    if (scalar(@{$foundListRef}) == 0) {
+        EXIT(255, "given issue not found");
+    }
+    elsif(scalar(@{$foundListRef}) > 1) {
+        printf("error : more than one issue matches, please restrict search\n\n");
+        printIndexedIssueList(\@issuesFileContent, $foundListRef, 0);
+        EXIT(255);
+    }
+
+    # now take the only candidate
+    my $lineIndex = ${$foundListRef}[0];
+
+    printf("copying...\n");
+    printIssue($issuesFileContent[$lineIndex], 0, 1);
+    printf("\n");
 
     # prepare user directory if necessary because we need it for the issue's user id
     prepareUserDir();
 
-    # reading latest issue value from file (file contains only this one line!)
+    # reading latest issue value and milestone from user file
     my @userFileContent = readFile($userFile);
-
     if ($userFileContent[$USER_FILE_ISSUE_COUNTER] !~ /^\d+$/) {
         EXIT(255, "$userFile contains invalid latest value!");
     }
@@ -1178,7 +1324,10 @@ sub cpCmd {   # cp <issue>
         writeFile($userFile, \@userFileContent);
 
         # write issue into issues file (id, user name, email will be set to current user, state will be set to open and current default milestone will be used!)
-        appendFile($issuesFile, [createIssueEntry(getIssueTag($userFileContent[$USER_FILE_ISSUE_COUNTER], $userName, $email), $issueType, $ISSUE_STATES{"open"}, $userFileContent[$USER_FILE_MILESTONE], $title)]);
+        my $newIssue = createIssueEntry(getIssueTag($userFileContent[$USER_FILE_ISSUE_COUNTER], $userName, $email), $issueType, $ISSUE_STATES{"open"}, $userFileContent[$USER_FILE_MILESTONE], $title);
+        appendFile($issuesFile, [$newIssue]);
+
+        printf("to... ".(getShortIssueTag($userFileContent[$USER_FILE_ISSUE_COUNTER], $userName))."\n\n\n");
 
         # read history file from original issue
         my ($certainIssueFileName, $certainIssueFile) = getFileName($FILE_NAME_CERTAIN_ISSUE, $issueValue, $issueUserName, $issueEmail);
@@ -1187,7 +1336,7 @@ sub cpCmd {   # cp <issue>
             %tagHash = readTaggedFile($certainIssueFile);
         }
         else {
-            EXIT(255, "no comment/history file found: $certainIssueFile");      # @todo: evtl. autorepair hier aufrufen?
+            EXIT(255, "copied but no comment/history file found: $certainIssueFile");      # @todo: evtl. autorepair hier aufrufen?
         }
 
         # replace original [HISTORY] section
@@ -1206,15 +1355,119 @@ sub cpCmd {   # cp <issue>
 }
 
 
-# change issue state to closed
-sub closeCmd {    # close <issue>
-    DEBUG($DEBUG_LOW, "closeCmd()");
+# change issue state to "state"
+sub stateCmd {    # state <state> <issue>
+    DEBUG($DEBUG_LOW, "stateCmd()");
+    my @arguments = @_;
+
+    # check command arguments
+    if (@arguments != 2 || ($arguments[0] ne "close" && $arguments[0] ne "reopen")) {
+        $cmd{"help"}->("'git-fool state' parameters mismatch", 255);
+    }
+    my $setState = shift(@arguments);
+
+    testFoolDir();      # check if .fool directory exists (if not init hasn't be called yet!)
+
+    # read issues file
+    my @issuesFileContent = readFile($issuesFile);
+    if (!@issuesFileContent) {
+        printf("issue file is empty!\n");
+        return;
+    }
+
+    # find candidates
+    my $foundListRef = matchPatterns(\@issuesFileContent, scalar(@arguments) ? ["^$arguments[0]"] : []);
+
+    # if only one element found print it always long
+    if (scalar(@{$foundListRef}) == 0) {
+        EXIT(255, "given issue not found");
+    }
+    elsif(scalar(@{$foundListRef}) > 1) {
+        printf("error : more than one issue matches, please restrict search\n\n");
+        printIndexedIssueList(\@issuesFileContent, $foundListRef, 0);
+        EXIT(255);
+    }
+
+    # now take the only candidate
+    my $lineIndex = ${$foundListRef}[0];
+
+    # prepare user directory if necessary because we need it for the temp file
+    prepareUserDir();
+
+    # prepare necessary strings (for HISTORY because for the issue we take all information from the issue itself otherwise a user cannot change an issue from another sb. else!)
+    prepareEmail(1);
+    prepareUserName(1);
+    prepareCheckout(1);
+
+    # set to 1 if anything of the issue has been changed!
+    my $issueChanged = 0;
+
+    # now scan and handle line
+    my $line = $issuesFileContent[$lineIndex];
+    if ($line =~ /^([^\/]+)\/([^\/]+)\/([^\/]+)\/([^\/]+)\/([^\/]+)\/([^\/]+)\/(.+)$/) {
+        # process with line elements
+        my ($id, $userName, $email, $issueType, $state, $milestone, $title) = ($1, $2, $3, $4, $5, $6, $7);
+
+        my $newState = ($setState eq "close") ? "closed" : "open";
+
+        # check if issue is in open state
+        if ($state eq $ISSUE_STATES{$newState}) {
+            EXIT(255, "issue already $newState");
+        }
+
+        # set issue into closed state
+        $issuesFileContent[$lineIndex] = createIssueEntry(getIssueTag($id, $userName, $email), $issueType, $newState, $milestone, $title);
+        writeFile($issuesFile, \@issuesFileContent);
+
+        printf("%s...\n", ($setState eq "close") ? "closed" : "reopened");
+        printIssue($issuesFileContent[$lineIndex], 0, 1);
+        printf("\n");
+
+        # read tagged file
+        my ($certainIssueFileName, $certainIssueFile) = getFileName($FILE_NAME_CERTAIN_ISSUE, $id, $userName, $email);
+
+        my %tagHash = ();
+        if ($certainIssueFile && -s $certainIssueFile) {
+            %tagHash = readTaggedFile($certainIssueFile);
+        }
+        else {
+            EXIT(255, "closed but no comment/history file found: $certainIssueFile");      # @todo: evtl. autorepair hier aufrufen?
+        }
+
+        # write changed history file back
+        addHistory(($setState eq "close") ? $HISTORY_TOKEN_CLOSED : $HISTORY_TOKEN_REOPENED, \%tagHash);
+        writeTaggedFile($certainIssueFile, \%tagHash);
+    }
+    else {
+        EXIT(255, "found damaged line in issue file: [$line]");
+    }
 }
 
 
+# close an open issue
+sub closeCmd {    # close <issue>
+    DEBUG($DEBUG_LOW, "closeCmd()");
+    my @arguments = @_;
+
+    # check command arguments
+    if (@arguments != 1) {
+        $cmd{"help"}->("'git-fool close' parameters mismatch", 255);
+    }
+    
+    stateCmd("close", $arguments[0]);
+}
+
 # reopen an already closed issue again
-sub reopenCmd {   # open <issue>
+sub reopenCmd {   # reopen <issue>
     DEBUG($DEBUG_LOW, "reopenCmd()");
+    my @arguments = @_;
+
+    # check command arguments
+    if (@arguments != 1) {
+        $cmd{"help"}->("'git-fool reopen' parameters mismatch", 255);
+    }
+
+    stateCmd("reopen", $arguments[0]);
 }
 
 
@@ -1240,28 +1493,31 @@ sub helpCmd { # help
     }
 
     printf("git-fool v0.1 (c) Manfred Hauser / git\@74th.de under the terms of GPL v3.0 or newer\n\n".
-           "usage: git-fool <command> [option(s)]\n".
+           "usage: git-fool <command> [<args>]\n".
            "Commands:\n".
            "  init                         initialize git-fool within current git repository\n".
            "  new [-c|-p] <title>          create new issue (give -c(omment and parameters)\n".
            "                               or -p(parameters only)), title mustn't contain any slashes!\n".
-           "  grep [-l] [<patterns>]       list all issues matching all given patterns (-l(ong))\n".                    # @todo: sortierung noch einbauen... simpel=nur nach issue, aufwändig=mit sortierangabe, z.B. i=issue, it=issue/type, ism=issue/state/milestone
-           "                               without patterns all are shown\n".
-           "                               escape characters if necessary, e.g. the dot and sth.\n".
-           "                               it helps to use single quotation marks, e.g. '0\.3'\n".
+           "  grep [-m|-l] [<patterns>]    list all issues matching all given patterns or all if no\n".                    # @todo: sortierung noch einbauen... simpel=nur nach issue, aufwändig=mit sortierangabe, z.B. i=issue, it=issue/type, ism=issue/state/milestone
+           "                               pattern has been given, short, -m(edium) or -l(ong)\n".
+           "                               when necessary escape characters, e.g. the dot and sth.\n".
+           "                               sometimes single quotation marks are necessary, e.g. '0\.3'\n".
            "                               comments aren't grepped but email addresses!\n".
-           "  ls [<issue>]                 show given issue (without issue it will act like 'git-fool grep')\n".
-           "                               given issue will be used as prefix of entries in issue file\n".
-           "                               so it can be e.g. '1', '1/3D' and '1/3DES/git\@74th.de'\n".
-           "  edit <issue>                 edit given 'open' issue\n".
-           "  cp <issue>                   copies given issue and starts editing\n".                                    # @todo: beim kopieren evtl. original issue im title eintragen?
+           "  ls [-m|-l] [<issue>]         show given issue, short, -m(edium) or -l(ong)\n".
+           "                               if only one issue matches it will always shown -l(ong)\n".
+           "                               given issue will be handled as prefix so usually not the whole\n".
+           "                               issue is necessary, e.g. '1', '1/3D' and '1/3DES/git\@74th.de'\n".
+           "  edit <issue>                 edit given 'open' issue, issue can be a prefix but must be\n".
+           "                               unique\n".
+           "  cp <issue>                   copies given issue and starts editing, issue can be a prefix\n".             # @todo: automatisches editieren über Parameter regeln (entweder -e = edit oder -n = nicht edit)
+           "                               but must be unique\n".
            "  close <issue>                set given issue to close\n".                                                 # @todo: Benutzer fragen, ob der eingegebene Milestone noch stimmt oder neuen eigeben lassen!
-           "  open <issue>                 reopen given issue\n".
+           "  reopen <issue>               reopen given issue\n".
            "                               in most cases it's better to copy instead of reopening!\n".
            "  rm <issue>                   remove given issue from disk\n".                                             # @todo: anwender fragen ob er sich wirklich sicher ist
            "  milestone                    show current milestone\n".
            "  milestone [-u <old>] <mlst>  set new current milestone\n".
-           "                               (-u(pdate) all open <old> MLSTs to <mlst>)\n".
+           "                               -u(pdate) all open <old> milestones to <mlst>\n".
            "  help                         show this help screen\n".
            "Settings (within git):\n".
            "  mandatory:\n".
