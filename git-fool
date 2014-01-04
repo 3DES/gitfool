@@ -1069,11 +1069,13 @@ sub lsCmd { # ls [-m|-l] [<tag> [<patterns>]]
     my @arguments = @_;
 
     # prepare arguments
-    if (@arguments && ($arguments[0] eq "-m" || $arguments[0] eq "-l")) {
-        $arguments[1] = "^".$arguments[1];
-    }
-    else {
-        $arguments[0] = "^".$arguments[0];
+    if (@arguments) {
+        if ($arguments[0] eq "-m" || $arguments[0] eq "-l") {
+            $arguments[1] = "^".$arguments[1];
+        }
+        else {
+            $arguments[0] = "^".$arguments[0];
+        }
     }
 
     # now call grepCmd() it will do the rest
@@ -1595,7 +1597,7 @@ sub milestone {   # milestone | milestone [-u <old>] <mlst>
 
 
 # repair issues if necessary
-sub milestone {   # repair [-c <counter>]
+sub repair {   # repair [-c <counter>]
     DEBUG($DEBUG_LOW, "milestone()");
 
 
