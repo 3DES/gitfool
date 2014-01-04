@@ -1,0 +1,12 @@
+##########################################################################
+# git-fool (c) 2014 Manfred Hauser - git@74th.de
+#   is a lightweight bug and issue tracker for git
+#########################################################################
+
+INSTALL
+- install perl 5 (any newer version should work)
+- load some modules from CPAN (run git-fool to check)
+- set your $PATH variable so that git-fool can be found by git
+
+
+
