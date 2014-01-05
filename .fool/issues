@@ -1,0 +1,4 @@
+1/3DES/git@74th.de/Task/open/0.2/each history entry should get current tag or branch if it exists
+2/3DES/git@74th.de/Task/open/0.2/maybe an autorepair function in certein cases would be nice
+3/3DES/git@74th.de/Task/open/0.5/global variables should be put in own "internal" package
+4/3DES/git@74th.de/Task/open/0.3/there is many duplicated code that should be cleaned up
