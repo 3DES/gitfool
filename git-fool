@@ -130,12 +130,12 @@ my $USER_FILE_MILESTONE     = 1;
 ################################################
 ############## helper functions ################
 ################################################
-# for a short periode of time CTRL+C should be disabled! @todo
+# for a short periode of time it could be necessary to disabled CTRL+C
 #$SIG{INT} = \&mySIGINT;
-sub mySIGINT() {
-    printf("CTRL+C not allowed at the moment\n");
-    $SIG{INT} = \&mySIGINT;
-}
+#sub mySIGINT() {
+#    printf("CTRL+C not allowed at the moment\n");
+#    $SIG{INT} = \&mySIGINT;
+#}
 
 
 # print string as hex
@@ -204,6 +204,16 @@ sub DEBUG($$) {
 }
 
 
+# prints error on screen
+sub ERROR($) {
+    my ($message) = @_;
+
+    # usually error 255 is an error from OS or user input
+    #         error 254 is an internal error and needs to fix git-fool
+    printf("error: $message\n");
+}
+
+
 # extended exit function
 sub EXIT($;$) {
     DEBUG($DEBUG_MED, "EXIT()");
@@ -211,9 +221,11 @@ sub EXIT($;$) {
 
     if (defined($message)) {
         if ($exitCode) {
-            printf("error: ");
+            ERROR($message."\n");
         }
-        printf("$message\n\n");
+        else {
+            printf("$message\n\n");
+        }
     }
     exit($exitCode);
 }
@@ -227,7 +239,7 @@ sub prepareUserName($) {
     # only if $userName is not yet set because of performance reaseons!
     if (!$userName) {
         $repository = Git::Repository->new() if (!defined($repository));
-        $userName = $repository->run("config" => "user.name");
+        $userName = $repository->run("config", "user.name");
 
         # user.name must be set to make git fool working!
         if (!$userName && $errorHandling) {
@@ -252,7 +264,7 @@ sub prepareEmail($) {
     # only if $email is not yet set because of performance reaseons!
     if (!$email) {
         $repository = Git::Repository->new() if (!defined($repository));
-        $email    = $repository->run("config" => "user.email");
+        $email    = $repository->run("config", "user.email");
         if (!$email && $errorHandling) {
             EXIT(255, "user.email not set in git!");
         }
@@ -267,7 +279,7 @@ sub prepareEditor() {
     # only if $editor is not yet set because of performance reaseons!
     if (!$editor) {
         $repository = Git::Repository->new() if (!defined($repository));
-        $editor   = $repository->run("config" => "core.editor");
+        $editor   = $repository->run("config", "core.editor");
         if (!$editor) {
             $editor = "vi";
         }
@@ -282,7 +294,7 @@ sub prepareCheckout($) {
 
     if (!$checkout) {
         $repository = Git::Repository->new() if (!defined($repository));
-        $checkout = $repository->run("rev-parse" => "HEAD");
+        $checkout = $repository->run("rev-parse", "HEAD");
         if (!$checkout && $errorHandling) {
             EXIT(255, "git-fool needs a valid checkout!");
         }
@@ -524,7 +536,8 @@ sub addHistory($$;$) {
         EXIT(254, "history token [$token] doesn't exist!");
     }
 
-    my $entry = $HISTORY_TOKENS{$token}.strftime("UTC, %b %e %H:%M:%S %Y", gmtime())." -by- ".getCurrentUserId()." -at- $checkout";       # @todo: branch/tag ermitteln und angeben, falls so einer existiert was nicht immer der Fall ist, z.B. wenn origin/master oder der hash zum auschecken verwendet wurde. gehen tut das mit (Fehlerprüfung git-versions-prüfung (>=1.8 vermutlich) nicht vergessen!): git symbolic-ref -q --short HEAD || git describe --tags --exact-match
+    my $entry = $HISTORY_TOKENS{$token}.strftime("UTC, %b %e %H:%M:%S %Y", gmtime())." -by- ".getCurrentUserId()." -at- $checkout";       # @todo: branch/tag should be stored here... git symbolic-ref -q --short HEAD || git describe --tags --exact-match
+
     if (defined($comment)) {
         $entry .= " - $comment";
     }
@@ -559,7 +572,7 @@ sub readFile($) {
         close($FH);
     }
     else {
-        printf("error: file $fileName doesn't exist!\n");   # if file doesn't exist show error message but don't stop processing otherwise whole issue tracking won't work anymore if one file is missing!
+        ERROR("file $fileName doesn't exist!");     # if file doesn't exist show error message but don't stop processing otherwise whole issue tracking won't work anymore if one file is missing!
     }
 
     return @fileContent;
@@ -792,11 +805,15 @@ sub printIssue($$$) {
 
             # now try to print the comment&HISTORY file
             my $certainIssueFile   = getFileName($FILE_NAME_CERTAIN_ISSUE, $issueNr, $issueUserName, $issueEmail);
-            my @commentHistoryFile = readFile($certainIssueFile);
-            foreach my $line (@commentHistoryFile) {
-                printf("$line\n");
+            if ($certainIssueFile && -s $certainIssueFile) {
+                my @commentHistoryFile = readFile($certainIssueFile);
+                foreach my $line (@commentHistoryFile) {
+                    printf("$line\n");
+                }
             }
-
+            else {
+                EXIT(255, "no comment/history file found: $certainIssueFile");                  # @todo: implement autorepair function!?
+            }
             return;
         }
 
@@ -841,7 +858,7 @@ sub printIssue($$$) {
         }
     }
     else {
-        EXIT(255, "found damaged line in issue file: [$line]");
+        EXIT(255, "found damaged line in issue file: [$line]");                                 # @todo: implement autorepair function!?
     }
 }
 
@@ -912,7 +929,7 @@ sub newCmd {  # new [-c|-p] <title>
 
     # check command arguments
     if (scalar(@arguments) < 1 || (scalar(@arguments) == 1 && ($arguments[0] eq "-c" || $arguments[0] eq "-p"))) {
-        $cmd{"help"}->("'git-fool new' parameters mismatch", 255);
+        $cmd{"help"}->("new", "'git-fool new' parameters mismatch", 255);
     }
 
     testFoolDir();      # check if .fool directory exists (if not init hasn't be called yet!)
@@ -920,14 +937,16 @@ sub newCmd {  # new [-c|-p] <title>
 
     # reading latest issue value and milestone from user file
     my @userFileContent = readFile($userFile);
+
+    # checking issue value read from file
     if ($userFileContent[$USER_FILE_ISSUE_COUNTER] !~ /^\d+$/) {
-        EXIT(255, "$userFile contains invalid latest value!");
+        EXIT(255, "$userFile contains invalid latest value!");                                  # @todo: implement autorepair function!?
     }
     $userFileContent[$USER_FILE_ISSUE_COUNTER]++; # increment for current issue
 
-    # reading milestone value from file (file contains only this one line!)
-    if (!$userFileContent[$USER_FILE_MILESTONE]) {
-        EXIT(255, "$userFile contains invalid milestone value!");
+    # checking milestone read from file
+    if (!length($userFileContent[$USER_FILE_MILESTONE])) {
+        EXIT(255, "$userFile contains invalid milestone value!");                               # @todo: implement autorepair function!?
     }
 
     my $tempFile  = "";
@@ -1069,7 +1088,7 @@ sub lsCmd { # ls [-m|-l] [<tag> [<patterns>]]
     my @arguments = @_;
 
     # prepare arguments
-    if (@arguments) {
+    if (scalar(@arguments)) {
         if ($arguments[0] eq "-m" || $arguments[0] eq "-l") {
             $arguments[1] = "^".$arguments[1];
         }
@@ -1079,7 +1098,7 @@ sub lsCmd { # ls [-m|-l] [<tag> [<patterns>]]
     }
 
     # now call grepCmd() it will do the rest
-    grepCmd(@arguments);
+    $cmd{"grep"}->(@arguments);
 }
 
 
@@ -1089,8 +1108,8 @@ sub editCmd { # edit <tag> [<patterns>]
     my @arguments = @_;
 
     # check command arguments
-    if (@arguments < 1) {
-        $cmd{"help"}->("'git-fool edit' parameters mismatch", 255);
+    if (scalar(@arguments) < 1) {
+        $cmd{"help"}->("edit", "'git-fool edit' parameters mismatch", 255);
     }
 
     # prepare arguments
@@ -1110,12 +1129,12 @@ sub editCmd { # edit <tag> [<patterns>]
     my $foundListRef = matchPatterns(\@issuesFileContent, \@arguments);
 ####################################
 
-    # if only one element found print it always long
+    # check if issue found
     if (scalar(@{$foundListRef}) == 0) {
         EXIT(255, "given issue not found");
     }
     elsif(scalar(@{$foundListRef}) > 1) {
-        printf("error : more than one issue matches, please restrict search\n\n");
+        ERROR("more than one issue matches, please restrict search\n");
         printIndexedIssueList(\@issuesFileContent, $foundListRef, 0);
         EXIT(255);
     }
@@ -1156,7 +1175,6 @@ sub editCmd { # edit <tag> [<patterns>]
         if (length($newTitle)) {
             $title = $newTitle;
             $issueChanged = 1;
-            printf("changed\n");    # @todo: rauswerfen!
         }
 
         # reading milestone from user input
@@ -1167,7 +1185,6 @@ sub editCmd { # edit <tag> [<patterns>]
         if ($newMilestone) {
             $milestone = $newMilestone;
             $issueChanged = 1;
-            printf("changed\n");    # @todo: rauswerfen!
         }
 
         # find issue type string and convert it into issue type value
@@ -1197,7 +1214,6 @@ sub editCmd { # edit <tag> [<patterns>]
             if ($newIssueType =~ /^\d+$/ && $newIssueType >= 0 && $newIssueType < scalar(keys(%ISSUE_TYPES))) {      # valid user input
                 $issueType = $newIssueType;
                 $issueChanged = 1;
-                printf("changed\n");    # @todo: rauswerfen!
                 last;
             }
             elsif (!$newIssueType) {    # just [ENTER]
@@ -1216,13 +1232,12 @@ sub editCmd { # edit <tag> [<patterns>]
 
         # read tagged file
         my ($certainIssueFileName, $certainIssueFile) = getFileName($FILE_NAME_CERTAIN_ISSUE, $id, $userName, $email);
-
         my %tagHash = ();
         if ($certainIssueFile && -s $certainIssueFile) {
             %tagHash = readTaggedFile($certainIssueFile);
         }
         else {
-            EXIT(255, "changed but no comment/history file found: $certainIssueFile");      # @todo: evtl. autorepair hier aufrufen?
+            EXIT(255, "changed but no comment/history file found: $certainIssueFile");          # @todo: implement autorepair function!?
         }
 
         # write temp file for beeing edited
@@ -1243,7 +1258,7 @@ sub editCmd { # edit <tag> [<patterns>]
         unlink($tempFile);
     }
     else {
-        EXIT(255, "found damaged line in issue file: [$line]");
+        EXIT(255, "found damaged line in issue file: [$line]");                                 # @todo: implement autorepair function!?
     }
 }
 
@@ -1254,8 +1269,8 @@ sub cpCmd {   # cp <tag> [<patterns>]
     my @arguments = @_;
 
     # check command arguments
-    if (@arguments < 1) {
-        $cmd{"help"}->("'git-fool cp' parameters mismatch", 255);
+    if (scalar(@arguments) < 1) {
+        $cmd{"help"}->("cp", "'git-fool cp' parameters mismatch", 255);
     }
 
     # prepare arguments
@@ -1280,7 +1295,7 @@ sub cpCmd {   # cp <tag> [<patterns>]
         EXIT(255, "given issue not found");
     }
     elsif(scalar(@{$foundListRef}) > 1) {
-        printf("error : more than one issue matches, please restrict search\n\n");
+        ERROR("more than one issue matches, please restrict search\n");
         printIndexedIssueList(\@issuesFileContent, $foundListRef, 0);
         EXIT(255);
     }
@@ -1297,14 +1312,16 @@ sub cpCmd {   # cp <tag> [<patterns>]
 
     # reading latest issue value and milestone from user file
     my @userFileContent = readFile($userFile);
+
+    # checking issue value read from file
     if ($userFileContent[$USER_FILE_ISSUE_COUNTER] !~ /^\d+$/) {
-        EXIT(255, "$userFile contains invalid latest value!");
+        EXIT(255, "$userFile contains invalid latest value!");                                  # @todo: implement autorepair function!?
     }
     $userFileContent[$USER_FILE_ISSUE_COUNTER]++; # increment for current issue
 
-    # reading milestone value from file (file contains only this one line!)
-    if (!$userFileContent[$USER_FILE_MILESTONE]) {
-        EXIT(255, "$userFile contains invalid milestone value!");
+    # checking milestone read from file
+    if (!length($userFileContent[$USER_FILE_MILESTONE])) {
+        EXIT(255, "$userFile contains invalid milestone value!");                               # @todo: implement autorepair function!?
     }
 
     # prepare necessary strings (for HISTORY because for the issue we take all information from the issue itself otherwise a user cannot change an issue from another sb. else!)
@@ -1334,7 +1351,7 @@ sub cpCmd {   # cp <tag> [<patterns>]
             %tagHash = readTaggedFile($certainIssueFile);
         }
         else {
-            EXIT(255, "copied but no comment/history file found: $certainIssueFile");      # @todo: evtl. autorepair hier aufrufen?
+            EXIT(255, "copied but no comment/history file found: $certainIssueFile");           # @todo: implement autorepair function!?
         }
 
         # replace original [HISTORY] section
@@ -1348,7 +1365,7 @@ sub cpCmd {   # cp <tag> [<patterns>]
         editCmd($userFileContent[$USER_FILE_ISSUE_COUNTER]);
     }
     else {
-        EXIT(255, "found damaged line in issue file: [$line]");
+        EXIT(255, "found damaged line in issue file: [$line]");                                 # @todo: implement autorepair function!?
     }
 }
 
@@ -1359,8 +1376,8 @@ sub stateCmd {    # state <state> <patterns>
     my @arguments = @_;
 
     # check command arguments
-    if (@arguments < 2 || !($ISSUE_STATES{$arguments[0]})) {
-        $cmd{"help"}->("'git-fool state' parameters mismatch", 255);
+    if (scalar(@arguments) < 2 || !($ISSUE_STATES{$arguments[0]})) {
+        $cmd{"help"}->("state", "'git-fool state' parameters mismatch", 255);
     }
     my $newState = shift(@arguments);
 
@@ -1386,7 +1403,7 @@ sub stateCmd {    # state <state> <patterns>
         EXIT(255, "given issue not found");
     }
     elsif(scalar(@{$foundListRef}) > 1) {
-        printf("error : more than one issue matches, please restrict search\n\n");
+        ERROR("more than one issue matches, please restrict search\n");
         printIndexedIssueList(\@issuesFileContent, $foundListRef, 0);
         EXIT(255);
     }
@@ -1426,13 +1443,12 @@ sub stateCmd {    # state <state> <patterns>
 
         # read tagged file
         my ($certainIssueFileName, $certainIssueFile) = getFileName($FILE_NAME_CERTAIN_ISSUE, $id, $userName, $email);
-
         my %tagHash = ();
         if ($certainIssueFile && -s $certainIssueFile) {
             %tagHash = readTaggedFile($certainIssueFile);
         }
         else {
-            EXIT(255, "closed but no comment/history file found: $certainIssueFile");      # @todo: evtl. autorepair hier aufrufen?
+            EXIT(255, "closed but no comment/history file found: $certainIssueFile");           # @todo: implement autorepair function!?
         }
 
         # write changed history file back
@@ -1450,7 +1466,7 @@ sub stateCmd {    # state <state> <patterns>
         }
     }
     else {
-        EXIT(255, "found damaged line in issue file: [$line]");
+        EXIT(255, "found damaged line in issue file: [$line]");                                 # @todo: implement autorepair function!?
     }
 }
 
@@ -1461,15 +1477,15 @@ sub closeCmd {    # close <tag> [<patterns>]
     my @arguments = @_;
 
     # check command arguments
-    if (@arguments < 1) {
-        $cmd{"help"}->("'git-fool close' parameters mismatch", 255);
+    if (scalar(@arguments) < 1) {
+        $cmd{"help"}->("close", "'git-fool close' parameters mismatch", 255);
     }
 
     # prepare arguments
     $arguments[0] = "^".$arguments[0];
 
     # now call stateCmd() it will do the rest
-    stateCmd($ISSUE_STATES{"closed"}, @arguments);
+    $cmd{"state"}->($ISSUE_STATES{"closed"}, @arguments);
 }
 
 # reopen an already closed issue again
@@ -1478,15 +1494,15 @@ sub reopenCmd {   # reopen <tag> [<patterns>]
     my @arguments = @_;
 
     # check command arguments
-    if (@arguments < 1) {
-        $cmd{"help"}->("'git-fool reopen' parameters mismatch", 255);
+    if (scalar(@arguments) < 1) {
+        $cmd{"help"}->("reopen", "'git-fool reopen' parameters mismatch", 255);
     }
 
     # prepare arguments
     $arguments[0] = "^".$arguments[0];
 
     # now call stateCmd() it will do the rest
-    stateCmd($ISSUE_STATES{"open"}, @arguments);
+    $cmd{"state"}->($ISSUE_STATES{"open"}, @arguments);
 }
 
 
@@ -1497,8 +1513,8 @@ sub rmCmd {   # rm <tag> [<patterns>]
     my @arguments = @_;
 
     # check command arguments
-    if (@arguments < 1) {
-        $cmd{"help"}->("'git-fool rm' parameters mismatch", 255);
+    if (scalar(@arguments) < 1) {
+        $cmd{"help"}->("rm", "'git-fool rm' parameters mismatch", 255);
     }
 
     # prepare arguments
@@ -1523,7 +1539,7 @@ sub rmCmd {   # rm <tag> [<patterns>]
         EXIT(255, "given issue not found");
     }
     elsif(scalar(@{$foundListRef}) > 1) {
-        printf("error : more than one issue matches, please restrict search\n\n");
+        ERROR("more than one issue matches, please restrict search\n");
         printIndexedIssueList(\@issuesFileContent, $foundListRef, 0);
         EXIT(255);
     }
@@ -1571,106 +1587,243 @@ sub rmCmd {   # rm <tag> [<patterns>]
 
         # remove comment/HISTORY file if exists otherwise show error message
         if (!($certainIssueFile && -s $certainIssueFile)) {
-            EXIT(255, "issue removed but no comment/history file found: $certainIssueFile");      # @todo: evtl. autorepair hier aufrufen?
+            EXIT(255, "issue removed but no comment/history file found: $certainIssueFile");    # @todo: implement autorepair function!?
         }
         unlink($certainIssueFile);
     }
     else {
-        EXIT(255, "found damaged line in issue file: [$line]");
+        EXIT(255, "found damaged line in issue file: [$line]");                                 # @todo: implement autorepair function!?
     }
 }
 
 
 # change default milestone or update milestones from existing issues
-sub milestone {   # milestone | milestone [-u <old>] <mlst>
+sub milestoneCmd {   # milestone [<mlst> [<pattern>]]
     DEBUG($DEBUG_LOW, "milestone()");
     
     my @arguments = @_;
 
-    # check command arguments
-    if (scalar(@arguments) > 3 || (scalar(@arguments) == 1 && ($arguments[0] eq "-c" || $arguments[0] eq "-p"))) {
-        $cmd{"help"}->("'git-fool milestone' parameters mismatch", 255);
+    testFoolDir();      # check if .fool directory exists (if not init hasn't be called yet!)
+    prepareUserDir();   # may be we have to create the user directory if this is the first time current user calls 'new' command
+
+    # prepare necessary strings (for user file change and for HISTORY entries)
+    prepareEmail(1);
+    prepareUserName(1);
+    prepareCheckout(1);
+
+    # reading latest issue value and milestone from user file
+    my @userFileContent = readFile($userFile);
+
+    # checking issue value read from file
+    if ($userFileContent[$USER_FILE_ISSUE_COUNTER] !~ /^\d+$/) {
+        EXIT(255, "$userFile contains invalid latest value!");                                  # @todo: implement autorepair function!?
     }
 
+    # checking milestone read from file
+    if (!length($userFileContent[$USER_FILE_MILESTONE])) {
+        EXIT(255, "$userFile contains invalid milestone value!");                               # @todo: implement autorepair function!?
+    }
+
+    # remember current milestone
+    my $oldMilestone = $userFileContent[$USER_FILE_MILESTONE];
+
+    # now handle arguments
+    my $updatePattern = undef;
+    if (scalar(@arguments) == 0) {
+        printf("default milestone is [$userFileContent[$USER_FILE_MILESTONE]]\n");
+        return;
+    }
+    my $newMilestone = shift(@arguments);
+    normalizeString($newMilestone);
+
+    # new milestone valid?
+    if (!length($newMilestone)) {
+        EXIT(255, "given milestone is invalid, it cannot be empty");
+    }
     
-}
+    # if new and old milestones identical don't write user file
+    if ($newMilestone ne $oldMilestone) {
+        # update milestone value
+        $userFileContent[$USER_FILE_MILESTONE] = $newMilestone;
+    
+        # user info
+        printf("milestone changed from [$oldMilestone] to [$newMilestone]\n");
+    
+        # update .fool/<user>/<email> file
+        writeFile($userFile, \@userFileContent);
+    }
+    else {
+        # user info
+        printf("default milestone not changed because old and new milestones are identical\n");
+    }
 
+    # leave if -u is not given
+    return if(!scalar(@arguments));
 
-# repair issues if necessary
-sub repair {   # repair [-c <counter>]
-    DEBUG($DEBUG_LOW, "milestone()");
+####################################
+    #testFoolDir();      # check if .fool directory exists (if not init hasn't be called yet!)
 
+    # read issues file
+    my @issuesFileContent = readFile($issuesFile);
+    if (!@issuesFileContent) {
+        printf("issue file is empty!\n");
+        return;
+    }
 
+    # find candidates
+    my $foundListRef = matchPatterns(\@issuesFileContent, \@arguments);
+####################################
+
+    # check if issue found
+    if (scalar(@{$foundListRef}) == 0) {
+        EXIT(255, "given issue not found");
+    }
+
+    # set to 1 if any issue has been changed (only if it's 1 the issues file will be written back)!
+    my $issueChanged = 0;
+
+    foreach my $lineIndex (@{$foundListRef}) {
+        # now scan and handle line
+        my $line = $issuesFileContent[$lineIndex];
+
+        if ($line =~ /^([^\/]+)\/([^\/]+)\/([^\/]+)\/([^\/]+)\/([^\/]+)\/([^\/]+)\/(.+)$/) {
+            # process with line elements
+            my ($issueNr, $issueUserName, $issueEmail, $issueType, $issueState, $issueMilestone, $issueTitle) = ($1, $2, $3, $4, $5, $6, $7);
+    
+            # check if issue is not closed because closed ones won't be changed
+            if ($issueState eq $ISSUE_STATES{"closed"} || $newMilestone eq $issueMilestone) {
+                next;
+            }
+
+            # first replace found so print user message
+            if (!$issueChanged) {
+                printf("change milestones...\n\n");
+            }
+
+            # change issue's milestone
+            $issuesFileContent[$lineIndex] = createIssueEntry(getIssueTag($issueNr, $issueUserName, $issueEmail), $issueType, $issueState, $newMilestone, $issueTitle);
+
+            # print changed issue to screen
+            printIssue($issuesFileContent[$lineIndex], 0, !$issueChanged);
+            $issueChanged = 1;
+
+            # read HISTORY file
+            my ($certainIssueFileName, $certainIssueFile) = getFileName($FILE_NAME_CERTAIN_ISSUE, $issueNr, $issueUserName, $issueEmail);
+            my %tagHash = ();
+            if ($certainIssueFile && -s $certainIssueFile) {
+                %tagHash = readTaggedFile($certainIssueFile);
+            }
+            else {
+                ERROR("issue changed but no comment/history file found: $certainIssueFile");    # @todo: implement autorepair function!?
+            }
+
+            # add comment and write HISTORY file back                        
+            addHistory($HISTORY_TOKEN_CHANGED, \%tagHash);
+            writeTaggedFile($certainIssueFile, \%tagHash);
+        }
+    }
+    
+    # write back issues file if necessary
+    if ($issueChanged) {
+        writeFile($issuesFile, \@issuesFileContent);
+    }
+    else {
+        printf("no issues found to set new milestone\n");
+    }    
 }
 
 
 # print help screen
 sub helpCmd { # help
     DEBUG($DEBUG_LOW, "helpCmd()");
-    my ($error, $exitCode) = @_;
+    my ($command, $error, $exitCode) = @_;
+
+    my $FOOL_HEADER     =  "git-fool v0.1 (c) 2014 Manfred Hauser / git\@74th.de under the terms of GPL v3.0 or newer\n".
+                           "usage: git-fool <command> [<args>]\n";
+
+    my $COMMANDS_HEADER =  "Commands:\n";
+
+    my @COMMANDS_HELP   = ("  init                               prepare current git repository for beeing used with git-fool.\n"               ,
+                           "  new [-c|-p] <title>                create new issue, opionally give -c(omment and parameters) or\n"               ,
+                           "  grep [-m|-l] [<pattern(s)>]        list all issues matching all given patterns or all issues if no\n".
+                           "                                       pattern has been given, short, -m(edium) or -l(ong). If necessary\n".
+                           "                                       escape characters, e.g. a \'.\', and sometimes single quotation\n".
+                           "                                       marks are necessary, e.g. \'0\.3\'. Comments aren\'t grepped but\n".
+                           "                                       email addresses!\n".
+                           "                                       Works similar to 'git-fool ls' but without any tag.\n"                       ,
+                           "  ls [-m|-l] [<tag> [<pattern(s)>]]  show issue with tag, short (default), -m(edium) or -l(ong).\n".
+                           "                                       Given tag will be handled as prefix so usually not the whole\n".
+                           "                                       issue is necessary, e.g. \'1\', \'1/3D\' and \'1/3DES/git\@74th.de\',\n".
+                           "                                       all futher given parameters are used for grepping.\n".
+                           "                                       Works similar to 'git-fool grep' but tag is needed.\n"                       ,
+                           "  edit <tag> [<pattern(s)>]          edit open issue \'tag\', tag can be a prefix but issue must be unique.\n"      ,
+                           "  cp <tag> [<pattern(s)>]            copy issue \'tag\', tag can be a prefix but issue must be unique.\n".
+                           "                                       After copy editing new issue will be started.\n"                             ,
+                           "  rm <tag> [<pattern(s)>]            remove issue \'tag\', tag can be a prefix but issue must be unique.\n".
+                           "                                       A single backup file will be written in fools user directory.\n"             ,
+                           "  close <tag> [<pattern(s)>]         close open issue \'tag\', tag can be a prefix but issue must be unique.\n"     ,
+                           "  reopen <tag> [<pattern(s)>]        reopen issue \'tag\', tag can be a prefix but issue must be unique.\n".
+                           "                                       In most cases it\'s better to copy instead of reopening!\n"                  ,
+                           "  state <state> [<pattern(s)>]       sets state of matched issue to state, issue must be unique.\n".
+                           "                                       Similar to \'git-fool close/reopen\' but only patterns, no tag.\n"           ,
+                           "  milestone [<mlst> [<pattern(s)>]]  without any parameter default milestone is shown, given mlst will\n".
+                           "                                       be set as new default milestone. With given patterns all open issues\n".
+                           "                                       that match will be updated to new milestone.\n".
+                           "                                       A \'\"\"\' pattern matches every milestone and updates all open issues.\n"   ,
+                           "  help [command]                     show this help screen or only that for command if given.\n"                    );
+
+    my %COMMANDS_INDEX  = ("init"      => 0, 
+                           "new"       => 1, 
+                           "grep"      => 2, 
+                           "ls"        => 3, 
+                           "edit"      => 4, 
+                           "cp"        => 5, 
+                           "rm"        => 6, 
+                           "close"     => 7, 
+                           "reopen"    => 8, 
+                           "state"     => 9, 
+                           "milestone" => 10,
+                           "help"      => 11);
+
+
+    my $COMMENTS        =   "Comments:\n".
+                            "  A full tag looks like this: <counter>/<user>/<email> and therefore is unique otherwise it would conflict\n".
+                            "    with several developers.\n".
+                            "  If a command needs a tag the given value will be used as prefix of the issues\' tags\n".
+                            "    e.g. for an issue tag \'42/3DES/git\@74th.de\' \'42\', \'42/3\' or \'42/3DES/git\' would be valid prefixes.\n".
+                            "  If a command needs one or several patterns they will be used to grep through the whole issue, tag included,\n".
+                            "    but without comments.\n".
+                            "  pattern(s) means one or many, e.g. \'git-fool edit\' can be called e.g. \'git fool edit <pattern> <pattern> ...\'\n".
+                            "  All tags and patterns are handled as regular expressions!\n".
+                            "  Once called commands cannot be made undone, but remember we are inside a repository, and this is a job for git!\n".
+                            "  Do not write section like text into comments (e.g. \'[foobar]\'), they will be stored fine but won\'t be\n".
+                            "    editable anymore with git-fool default option, you have to edit it into text editor!\n";
+
+    my $SETTINGS        =   "Settings (within git):\n".
+                            "  mandatory:\n".
+                            "    user.name                    developers name\n".
+                            "    user.email                   developers email\n".
+                            "  optional:\n".
+                            "    core.editor                  for issue comment (default is \'vi\');\n";
 
     if (defined($error)) {
-        printf("error: $error\n\n");
+        ERROR("$error\n");
     }
 
-    print <<HELP;
-git-fool v0.1 (c) 2014 Manfred Hauser / git\@74th.de under the terms of GPL v3.0 or newer
-usage: git-fool <command> [<args>]
-
-Commands:
-  init                               prepare current git repository for beeing used with git-fool.
-  new [-c|-p] <title>                create new issue, opionally give -c(omment and parameters) or
-                                       -p(arameters only), title mustn\'t contain any slashes!
-  grep [-m|-l] [<patterns>]          list all issues matching all given patterns or all issues if no
-                                       pattern has been given, short, -m(edium) or -l(ong). If necessary
-                                       escape characters, e.g. a \'.\', and sometimes single quotation
-                                       marks are necessary, e.g. \'0\.3\'. Comments aren\'t grepped but
-                                       email addresses!
-                                       Works similar to 'git-fool ls' but without any tag.
-  ls [-m|-l] [<tag> [<patterns>]]    show issue with tag, short (default), -m(edium) or -l(ong).
-                                       Given tag will be handled as prefix so usually not the whole
-                                       issue is necessary, e.g. \'1\', \'1/3D\' and \'1/3DES/git\@74th.de\',
-                                       all futher given parameters are used for grepping.
-                                       Works similar to 'git-fool grep' but tag is needed.
-  edit <tag> [<patterns>]            edit open issue \'tag\', tag can be a prefix but issue must be unique.
-  cp <tag> [<patterns>]              copy issue \'tag\', tag can be a prefix but issue must be unique.
-                                       After copy editing new issue will be started.
-  rm <tag> [<patterns>]              remove issue \'tag\', tag can be a prefix but issue must be unique.
-                                       A single backup file will be written in fools user directory.
-  close <tag> [<patterns>]           close open issue \'tag\', tag can be a prefix but issue must be unique.
-  reopen <tag> [<patterns>]          reopen issue \'tag\', tag can be a prefix but issue must be unique.
-                                       In most cases it\'s better to copy instead of reopening!
-  state <state> [<patterns>]         sets state of matched issue to state, issue must be unique.
-                                       Similar to \'git-fool close/reopen\' but only patterns, no tag.
-  milestone [[-u <pattern>] <mlst>]  without any parameter default milestone is shown, given mlst will
-                                       be set as new default milestone, -u(pdate) will update all open
-                                       issues where pattern matches with issues\' milestones.
-  repair [-c <counter>]              if fool\'s files got corrupted it could be possible to repair them
-                                       again, -c(ounter) sets a new user\'s counter, USE IT CAREFULLY!!!
-                                       if no -c(ounter) is given but needed proper value will be
-                                       recalculated from issues and history files. -m(ilestone) sets a new
-                                       default milestone. With existing history files the issues file will
-                                       be rebuilt with first not empty history line as title, with existing
-                                       issues file the history files will be rebuilt without comments.
-  help                               show this help screen.
-
-Comments:
-  A full tag looks like this: <counter>/<user>/<email> and therefore is unique otherwise it would conflict
-    with several developers.
-  If a command needs a tag the given value will be used as prefix of the issues\' tags
-    e.g. for an issue tag \'42/3DES/git\@74th.de\' \'42\', \'42/3\' or \'42/3DES/git\' would be valid prefixes.
-  If a command needs one or several patterns they will be used to grep through the whole issue, tag included,
-    but without comments.
-  All tags and patterns are handled as regular expressions!
-  Once called commands cannot be made undone, but remember we are inside a repository, and this is git's job!
-
-Settings (within git):
-  mandatory:
-    user.name                    developers name
-    user.email                   developers email
-  optional:
-    core.editor                  for issue comment (default is \'vi\');
-HELP
+    printf("$FOOL_HEADER\n");
+    
+    if (defined($command) && defined($COMMANDS_INDEX{$command})) {
+        printf("$COMMANDS_HELP[$COMMANDS_INDEX{$command}]\n");
+    }
+    else {
+        foreach my $help (@COMMANDS_HELP) {
+            printf("$help");
+        }
+        printf("\n");
+        printf("$COMMENTS\n");
+        printf("$SETTINGS\n");
+    }
+    
 
     if ($exitCode) {
         EXIT($exitCode);
@@ -1682,7 +1835,7 @@ HELP
 sub dummyCmd {
     DEBUG($DEBUG_MED, "dummyCmd()");
 
-
+    $cmd{"help"}->();
 }
 
 
@@ -1704,9 +1857,9 @@ if ($cmd{$cmd}) {
 }
 else {
     DEBUG($DEBUG_LOW, "given command [$cmd] invalid");
-    $cmd{"help"}->("missing or unknown command", 255);
+    $cmd{"help"}->("", "missing or unknown command", 255);
 }
 
 
-1;
-
+# @todo: there is many duplicated code... not everywhere but at least at some positions it could be better to remove it!?
+# @todo: see all todos (autorepair...)
