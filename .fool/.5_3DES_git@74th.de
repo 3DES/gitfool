@@ -1,0 +1,6 @@
+if git-fool ls is called all issues are shown in the order they haven been created
+but it would be nice to sort them e.g. according to milestone, state, type, title or tag
+
+[HISTORY]
+CREATED:  UTC, Jan  5 01:27:10 2014 -by- 3DES/git@74th.de -at- fe19804a16dc451502d1a353ea55524328d09a5b
+

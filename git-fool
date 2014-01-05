@@ -1089,8 +1089,10 @@ sub lsCmd { # ls [-m|-l] [<tag> [<patterns>]]
 
     # prepare arguments
     if (scalar(@arguments)) {
-        if ($arguments[0] eq "-m" || $arguments[0] eq "-l") {
-            $arguments[1] = "^".$arguments[1];
+        if (($arguments[0] eq "-m" || $arguments[0] eq "-l")) {
+            if (scalar(@arguments) > 1) {
+                $arguments[1] = "^".$arguments[1];
+            }
         }
         else {
             $arguments[0] = "^".$arguments[0];
@@ -1738,7 +1740,7 @@ sub helpCmd { # help
     DEBUG($DEBUG_LOW, "helpCmd()");
     my ($command, $error, $exitCode) = @_;
 
-    my $FOOL_HEADER     =  "git-fool v0.1 (c) 2014 Manfred Hauser / git\@74th.de under the terms of GPL v3.0 or newer\n".
+    my $FOOL_HEADER     =  "git-fool v0.1a (c) 2014 Manfred Hauser / git\@74th.de under the terms of GPL v3.0 or newer\n".
                            "usage: git-fool <command> [<args>]\n";
 
     my $COMMANDS_HEADER =  "Commands:\n";

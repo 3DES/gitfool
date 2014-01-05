@@ -1,0 +1,8 @@
+if parameters -m or -l have been used with command 'ls' and no further pattern was given the
+arguments manipulation to search first given pattern as prefix of issue tag was buggy, it
+changed the "-m" to "^-m" and "-l" to "^-l"
+
+[HISTORY]
+CREATED:  UTC, Jan  5 01:37:22 2014 -by- 3DES/git@74th.de -at- fe19804a16dc451502d1a353ea55524328d09a5b
+CLOSED:   UTC, Jan  5 01:37:37 2014 -by- 3DES/git@74th.de -at- fe19804a16dc451502d1a353ea55524328d09a5b
+

@@ -2,3 +2,5 @@
 2/3DES/git@74th.de/Task/open/0.2/maybe an autorepair function in certein cases would be nice
 3/3DES/git@74th.de/Task/open/0.5/global variables should be put in own "internal" package
 4/3DES/git@74th.de/Task/open/0.3/there is many duplicated code that should be cleaned up
+5/3DES/git@74th.de/Task/open/0.3/any kind of sort function could be useful
+6/3DES/git@74th.de/Bug/closed/0.1a/bug within ls command when -l and -m parameters has been used
