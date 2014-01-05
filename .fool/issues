@@ -1,6 +1,9 @@
-1/3DES/git@74th.de/Task/open/0.2/each history entry should get current tag or branch if it exists
-2/3DES/git@74th.de/Task/open/0.2/maybe an autorepair function in certein cases would be nice
-3/3DES/git@74th.de/Task/open/0.5/global variables should be put in own "internal" package
-4/3DES/git@74th.de/Task/open/0.3/there is many duplicated code that should be cleaned up
+1/3DES/git@74th.de/Task/open/0.3/each history entry should get current git tag or branch if it exists
+2/3DES/git@74th.de/Task/open/0.3/maybe an autorepair function in certein cases would be nice
+3/3DES/git@74th.de/Task/open/0.3/global variables should be put in own "internal" package
+4/3DES/git@74th.de/Task/open/0.3/there is a lot of duplicated code that should be cleaned up
 5/3DES/git@74th.de/Task/open/0.3/any kind of sort function could be useful
 6/3DES/git@74th.de/Bug/closed/0.1a/bug within ls command when -l and -m parameters has been used
+7/3DES/git@74th.de/Task/closed/0.2/put git-fool under GPLv2 before making it available to the rest of the world
+8/3DES/git@74th.de/Task/open/0.3/colorize output to make it more readable
+9/3DES/git@74th.de/Task/open/0.3/a possibility to grep through all issues' comments would be helpful

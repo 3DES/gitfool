@@ -1740,7 +1740,7 @@ sub helpCmd { # help
     DEBUG($DEBUG_LOW, "helpCmd()");
     my ($command, $error, $exitCode) = @_;
 
-    my $FOOL_HEADER     =  "git-fool v0.1a (c) 2014 Manfred Hauser / git\@74th.de under the terms of GPL v3.0 or newer\n".
+    my $FOOL_HEADER     =  "git-fool v0.2 (c) 2014 Manfred Hauser / git\@74th.de under the terms of GPLv2 or newer\n".
                            "usage: git-fool <command> [<args>]\n";
 
     my $COMMANDS_HEADER =  "Commands:\n";
@@ -1797,7 +1797,7 @@ sub helpCmd { # help
                             "    but without comments.\n".
                             "  pattern(s) means one or many, e.g. \'git-fool edit\' can be called e.g. \'git fool edit <pattern> <pattern> ...\'\n".
                             "  All tags and patterns are handled as regular expressions!\n".
-                            "  Once called commands cannot be made undone, but remember we are inside a repository, and this is a job for git!\n".
+                            "  Called commands cannot be made undone, but remember we are inside a repository, and this is a job for git!\n".
                             "  Do not write section like text into comments (e.g. \'[foobar]\'), they will be stored fine but won\'t be\n".
                             "    editable anymore with git-fool default option, you have to edit it into text editor!\n";
 
@@ -1826,7 +1826,6 @@ sub helpCmd { # help
         printf("$SETTINGS\n");
     }
     
-
     if ($exitCode) {
         EXIT($exitCode);
     }
