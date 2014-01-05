@@ -1,11 +1,11 @@
 git-fool (c) 2014 Manfred Hauser - git@74th.de
-==============
+==============================================
 
 a lightweight distributed multi-user bug and issue tracker for git
 
 
 LICENSE
---------------
+-------
 This program is free software; you can redistribute it and/or modify it under
 the terms of the GNU General Public License as published by the Free Software
 Foundation; either version 2 of the License, or (at your option) any later version.
@@ -13,7 +13,7 @@ Foundation; either version 2 of the License, or (at your option) any later versi
 
 
 INSTALL
---------------
+-------
 - install perl 5 (any newer version should work)
 - load some modules from CPAN (run git-fool to check)
 - set your $PATH variable so that git-fool can be found by git
@@ -21,7 +21,7 @@ INSTALL
 
 
 FIRST STEPS
---------------
+-----------
 - change into git repository
 - run "git fool init"
 - run "git fool new this is my first issue"
@@ -32,7 +32,7 @@ FIRST STEPS
 
 
 COMMNENTS
---------------
+---------
 - yes, I know that some stuff in git-fool isn't perl-ish but I don't want
   it perl-ish I want it maintainable and readable ;)
 
