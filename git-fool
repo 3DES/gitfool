@@ -1020,6 +1020,8 @@ sub initCmd {
 
     # prepare fool dir if necessary
     prepareFoolDir();
+    
+    printf("initialized new tracker in $mainPath\n");
 }
 
 
