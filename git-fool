@@ -68,7 +68,7 @@ my %FILE_NAMES = ( $FILE_NAME_ISSUES            =>    "issues",        # to stor
                    $FILE_NAME_CERTAIN_ISSUE     =>    "",              # to be filled during runtime, user name and email are necessary that are not known atm.
                    $FILE_NAME_CURRENT_ISSUE     =>    "",              # to be filled during runtime, user name and email are necessary that are not known atm.
                    $FILE_NAME_USER              =>    "",              # to be filled during runtime, user name and email are necessary that are not known atm.
-                   $FILE_NAME_BACKUP            =>    ".backup",       # 
+                   $FILE_NAME_BACKUP            =>    ".backup",       #
                   );
 
 
@@ -122,8 +122,19 @@ my %ISSUE_STATES_HISTORY_ENTRY_MATCH = ($ISSUE_STATES{"open"}   => $HISTORY_TOKE
 
 
 # define user file elements
-my $USER_FILE_ISSUE_COUNTER = 0;
-my $USER_FILE_MILESTONE     = 1;
+my $USER_FILE_ISSUE_COUNTER = 0;    # means to be found in line 0
+my $USER_FILE_MILESTONE     = 1;    # means to be found in line 1
+
+
+# issue element position
+my %ISSUE_ELEMENT_POSITION = ("value"       => 0,
+                              "userName"    => 1,
+                              "email"       => 2,
+                              "type"        => 3,
+                              "state"       => 4,
+                              "milestone"   => 5,
+                              "title"       => 6,
+                             );
 
 
 
@@ -551,9 +562,41 @@ sub createIssueEntry($$$$$) {
     DEBUG($DEBUG_MED, "createIssueEntry()");
     my ($issueTag, $issueType, $issueState, $milestone, $issueTitle) = @_;
 
-    return "$issueTag/$issueType/$issueState/$milestone/$issueTitle";
+    if (!($issueTag =~ /^([^\/]+)\/([^\/]+)\/([^\/]+)$/)) {
+        EXIT(254, "git-fool bug: createIssueEntry() got wrong \$issueTag parameter = $issueTag");
+    }
+
+    my ($value, $userName, $email) = ($1, $2, $3);
+
+
+    my @issueLine;
+    @issueLine[$ISSUE_ELEMENT_POSITION{"value"}]     = $value;
+    @issueLine[$ISSUE_ELEMENT_POSITION{"userName"}]  = $userName;
+    @issueLine[$ISSUE_ELEMENT_POSITION{"email"}]     = $email;
+    @issueLine[$ISSUE_ELEMENT_POSITION{"type"}]      = $issueType;
+    @issueLine[$ISSUE_ELEMENT_POSITION{"state"}]     = $issueState;
+    @issueLine[$ISSUE_ELEMENT_POSITION{"milestone"}] = $milestone;
+    @issueLine[$ISSUE_ELEMENT_POSITION{"title"}]     = $issueTitle;
+
+    if (scalar(keys(%ISSUE_ELEMENT_POSITION)) != scalar(@issueLine)) {
+        EXIT(254, "git-fool bug: \%ISSUE_ELEMENT_POSITION doesn't fit to createIssueEntry(), one of them has been changed!");
+    }
+
+    return join("/", @issueLine);
 }
 
+
+# get issue element position
+sub issueElementPosition {
+    my ($element) = @_;
+
+    if (defined($ISSUE_ELEMENT_POSITION{$element})) {
+        return $ISSUE_ELEMENT_POSITION{$element};
+    }
+    else {
+        return -1;
+    }
+}
 
 # reads a string file into an array
 sub readFile($) {
@@ -871,7 +914,9 @@ sub printIndexedIssueList {
     my $isFirstLine = 1;
     foreach my $index (@{$foundListRef}) {
         my $line = ${$issuesFileContentRef}[$index];
-        printIssue($line, $printSize, $isFirstLine);
+        if (defined($line)) {   # with this we can use "delete($array[$index])" what will be nice sth.
+            printIssue($line, $printSize, $isFirstLine);
+        }
         $isFirstLine = 0;
     }
 }
@@ -880,22 +925,46 @@ sub printIndexedIssueList {
 # returns an array with indices (if pattern list is empty a match with all lines will be faked)
 sub matchPatterns {
     DEBUG($DEBUG_MED, "matchPatterns()");
-    my ($listRef, $patternListRef) = @_;
-
-    return [0..scalar(@{$listRef})-1] if (!scalar(@{$patternListRef}));
+    my ($listRef, $patternListRef, $patternNegativListRef) = @_;
 
     my @foundIndices = ();
+
+    # compress arrays to remove "undefined" elemenst makes the live easier for our callers!
+    if (defined($patternListRef)) {
+        @{$patternListRef} = grep(defined, @{$patternListRef});
+    }
+    else {
+        $patternListRef = [];
+    }
+    if (defined($patternNegativListRef)) {
+        @{$patternNegativListRef} = grep(defined, @{$patternNegativListRef});
+    }
+    else {
+        $patternNegativListRef = [];
+    }
+
 
     # now handle all issues' lines
     for (my $index = 0; $index < scalar(@{$listRef}); $index++) {   # all elements
         my $patternFound = 1;
-        foreach my $pattern (@{$patternListRef}) {                 # try to match all given patterns if one doesn't match ignore current element
-            if (${$listRef}[$index] !~ /$pattern/) {
+        foreach my $pattern (@{$patternListRef}) {                  # try to match all given patterns if one doesn't match ignore current element
+            if ((${$listRef}[$index] !~ /$pattern/)) {
                 $patternFound = 0;
                 last;
             }
         }
         next unless ($patternFound);    # if no pattern matched continue with next line...
+
+        # if an optional negative pattern list has been given...
+        if (defined($patternNegativListRef)) {
+            foreach my $pattern (@{$patternNegativListRef}) {                  # try to match all given negative patterns if one match ignore current element
+                if ((${$listRef}[$index] =~ /$pattern/)) {
+                    $patternFound = 0;
+                    last;
+                }
+            }
+            next unless ($patternFound);    # if no pattern matched continue with next line...
+        }
 
         push(@foundIndices, $index);
     }
@@ -904,7 +973,29 @@ sub matchPatterns {
 }
 
 
+# handle command line, getopt cannot be used in our case because we don't want to give -- all the time to prevent patterns be matched as parameters!
+sub handleCommandLine {
+    my ($patternsRef, $paramsRef) = @_;
 
+    for (my $i = 0; $i < scalar(@{$paramsRef}); $i++) {
+        my $matched = 0;
+        foreach my $key (keys(%{$patternsRef})) {
+            if (${$paramsRef}[$i] =~ /^($key)$/) {
+                if (!length(${$patternsRef}{$key})) {
+                    ${$patternsRef}{$key} = $1;
+                    #printf("match ${$patternsRef}{$key}, fill with $1\n");
+                    shift(@{$paramsRef});
+                    $i--;   # correction because we removed one element from the paramsRef array
+                    #print Dumper $paramsRef;
+                    #print("\n\n");
+                    $matched = 1;
+                }
+                last;   # finish here in either case... because if we find a parameter a second time it must already be an "arguments pattern"
+            }
+        }
+        last if (!$matched);    #to prevent "arguments pattern" to be matched as command line switches (e.g. -c, -m, ...) stop matching when first argument doesn't match any possible command line switch
+    }
+}
 
 
 
@@ -1047,21 +1138,31 @@ sub newCmd {  # new [-c|-p] <title>
 
 
 # search for certain issues
-sub grepCmd {   # grep [-m|-l] [<patterns>]
+sub grepCmd {   # grep [-c] [-m|-l] [<pattern(s)>]
     DEBUG($DEBUG_LOW, "grepCmd()");
     my @arguments = @_;
 
-    my $printSize = 0;  # 0=short, 1=medium, 2=long
+    my $negativePattern = undef;
+    my $printSize       = 0;   # 0 -> short, 1 -> medium, 2 -> long
 
     # check command arguments
-    if (@arguments && $arguments[0] eq "-m") {
-        $printSize = 1;
-        shift(@arguments);
+    my %commandLineSwitches = ("-c"      => "",
+                               "(-m|-l)" => "");
+
+    handleCommandLine(\%commandLineSwitches, \@arguments);
+    if (!($commandLineSwitches{"-c"})) {
+        $negativePattern = "^".(".+/" x issueElementPosition("state")).$ISSUE_STATES{"closed"}."/.+\$";
     }
-    elsif (@arguments && $arguments[0] eq "-l") {
-        $printSize = 2;
-        shift(@arguments);
+
+    if ($commandLineSwitches{"(-m|-l)"}) {
+        if ($commandLineSwitches{"(-m|-l)"} eq "-m") {
+            $printSize = 1;
+        }
+        elsif ($commandLineSwitches{"(-m|-l)"} eq "-l") {
+            $printSize = 2;
+        }
     }
+
 
 ####################################
     testFoolDir();      # check if .fool directory exists (if not init hasn't be called yet!)
@@ -1074,8 +1175,56 @@ sub grepCmd {   # grep [-m|-l] [<patterns>]
     }
 
     # find candidates
-    my $foundListRef = matchPatterns(\@issuesFileContent, \@arguments);
+    my $foundListRef;
+    $foundListRef = matchPatterns(\@issuesFileContent, \@arguments, [$negativePattern]);
+    
+
+    # grep candidates (each issue found here is a possible candidate for scanning its comment file)
+    my $grepListRef;
+    $grepListRef = matchPatterns(\@issuesFileContent, undef, [$negativePattern]);
+
+
+    # remove all already matched files
+    my %temp;
+    @temp{@{$foundListRef}} = ();                                   # create a temporary hash out of one of the two arrays
+    @{$grepListRef} = grep { ! exists $temp{$_} } @{$grepListRef};  # now let grep to the rest... removing all elements from @{$grepListRef} that are also in @{$foundListRef}
+
+
+    # now handle all comment files
+    my $matchPattern = "^".(".+/" x issueElementPosition("value"))."([^/]+)/([^/]+)/([^/]+)/";
+    foreach my $issue (@{$grepListRef}) {
+        # try to get value, userName and email from issues line
+        if ($issuesFileContent[$issue] =~ $matchPattern) {
+            my ($id, $userName, $email) = ($1, $2, $3);
+            my ($certainIssueFileName, $certainIssueFile) = getFileName($FILE_NAME_CERTAIN_ISSUE, $id, $userName, $email);
+
+            # read and grep through issue comment file
+            my @issuesFileContent = readFile($certainIssueFile);    # it's a tagged file but that doesn't matter, we open it for beeing grepped, not for beeing handled!
+
+            my @tempArguments = @arguments;
+            # search manually and don't use grep for this job because grep would search through all lines whereas we can stop with the first that 
+            LINE_LOOP:
+            foreach my $line (@issuesFileContent) {
+                for (my $i = scalar(@tempArguments)-1; $i >=0 ; $i--) {    # count downwards because we removing all matched elements and so we don't have to correct the loop variable if an element has been deleted
+                    if ($line =~ $tempArguments[$i]) {
+                        splice(@tempArguments, $i, 1);
+                    }
+                }
+                # temporary arguments array is empty means all patterns found!
+                if (!scalar(@tempArguments)) {
+                    push(@{$foundListRef}, $issue);
+                    last;   # last LINE_LOOP
+                }
+            }
+        }
+    }
+
+
+    # finaly sort list because additional elements have been "pushed"
+    @{$foundListRef} = sort{$a <=> $b}(@{$foundListRef});
+
 ####################################
+
 
     # now print them
     printIndexedIssueList(\@issuesFileContent, $foundListRef, $printSize);
@@ -1083,24 +1232,57 @@ sub grepCmd {   # grep [-m|-l] [<patterns>]
 
 
 # list issue(s)
-sub lsCmd { # ls [-m|-l] [<tag> [<patterns>]]
+sub lsCmd { # ls [-c] [-m|-l] [<tag> [<pattern(s)>]]
     DEBUG($DEBUG_LOW, "lsCmd()");
     my @arguments = @_;
 
-    # prepare arguments
-    if (scalar(@arguments)) {
-        if (($arguments[0] eq "-m" || $arguments[0] eq "-l")) {
-            if (scalar(@arguments) > 1) {
-                $arguments[1] = "^".$arguments[1];
-            }
+    my $negativePattern = undef;
+    my $printSize       = 0;   # 0 -> short, 1 -> medium, 2 -> long
+
+    # check command arguments
+    my %commandLineSwitches = ("-c"      => "",
+                               "(-m|-l)" => "");
+
+    handleCommandLine(\%commandLineSwitches, \@arguments);
+    if (!($commandLineSwitches{"-c"})) {
+        $negativePattern = "^".(".+/" x issueElementPosition("state")).$ISSUE_STATES{"closed"}."/.+\$";
+    }
+
+    if ($commandLineSwitches{"(-m|-l)"}) {
+        if ($commandLineSwitches{"(-m|-l)"} eq "-m") {
+            $printSize = 1;
         }
-        else {
-            $arguments[0] = "^".$arguments[0];
+        elsif ($commandLineSwitches{"(-m|-l)"} eq "-l") {
+            $printSize = 2;
         }
     }
 
-    # now call grepCmd() it will do the rest
-    $cmd{"grep"}->(@arguments);
+
+    # prepare arguments
+    if (scalar(@arguments)) {
+        $arguments[0] = "^".$arguments[0];
+    }
+
+
+####################################
+    testFoolDir();      # check if .fool directory exists (if not init hasn't be called yet!)
+
+    # read issues file
+    my @issuesFileContent = readFile($issuesFile);
+    if (!@issuesFileContent) {
+        printf("issue file is empty!\n");
+        return;
+    }
+
+    # find candidates
+    my $foundListRef;
+    $foundListRef = matchPatterns(\@issuesFileContent, \@arguments, [$negativePattern]);
+    
+
+####################################
+
+    # now print them
+    printIndexedIssueList(\@issuesFileContent, $foundListRef, $printSize);
 }
 
 
@@ -1455,7 +1637,7 @@ sub stateCmd {    # state <state> <patterns>
 
         # write changed history file back
         my $historyTag;
-        
+
         if ($ISSUE_STATES_HISTORY_ENTRY_MATCH{$newState}) {
             addHistory($ISSUE_STATES_HISTORY_ENTRY_MATCH{$newState}, \%tagHash);
         }
@@ -1580,9 +1762,9 @@ sub rmCmd {   # rm <tag> [<patterns>]
         # write backup file
         my ($backupIssueFileName,  $backupIssueFile)  = getFileName($FILE_NAME_BACKUP);
         writeTaggedFile($backupIssueFile, \%tagHash);
-        
+
         printf("backup file: $backupIssueFile\n");
-        
+
         # delete issue from issues file and write it back
         delete($issuesFileContent[$lineIndex]);
         writeFile($issuesFile, \@issuesFileContent);
@@ -1602,7 +1784,7 @@ sub rmCmd {   # rm <tag> [<patterns>]
 # change default milestone or update milestones from existing issues
 sub milestoneCmd {   # milestone [<mlst> [<pattern>]]
     DEBUG($DEBUG_LOW, "milestone()");
-    
+
     my @arguments = @_;
 
     testFoolDir();      # check if .fool directory exists (if not init hasn't be called yet!)
@@ -1642,15 +1824,15 @@ sub milestoneCmd {   # milestone [<mlst> [<pattern>]]
     if (!length($newMilestone)) {
         EXIT(255, "given milestone is invalid, it cannot be empty");
     }
-    
+
     # if new and old milestones identical don't write user file
     if ($newMilestone ne $oldMilestone) {
         # update milestone value
         $userFileContent[$USER_FILE_MILESTONE] = $newMilestone;
-    
+
         # user info
         printf("milestone changed from [$oldMilestone] to [$newMilestone]\n");
-    
+
         # update .fool/<user>/<email> file
         writeFile($userFile, \@userFileContent);
     }
@@ -1691,7 +1873,7 @@ sub milestoneCmd {   # milestone [<mlst> [<pattern>]]
         if ($line =~ /^([^\/]+)\/([^\/]+)\/([^\/]+)\/([^\/]+)\/([^\/]+)\/([^\/]+)\/(.+)$/) {
             # process with line elements
             my ($issueNr, $issueUserName, $issueEmail, $issueType, $issueState, $issueMilestone, $issueTitle) = ($1, $2, $3, $4, $5, $6, $7);
-    
+
             # check if issue is not closed because closed ones won't be changed
             if ($issueState eq $ISSUE_STATES{"closed"} || $newMilestone eq $issueMilestone) {
                 next;
@@ -1719,19 +1901,19 @@ sub milestoneCmd {   # milestone [<mlst> [<pattern>]]
                 ERROR("issue changed but no comment/history file found: $certainIssueFile");    # @todo: implement autorepair function!?
             }
 
-            # add comment and write HISTORY file back                        
+            # add comment and write HISTORY file back
             addHistory($HISTORY_TOKEN_CHANGED, \%tagHash);
             writeTaggedFile($certainIssueFile, \%tagHash);
         }
     }
-    
+
     # write back issues file if necessary
     if ($issueChanged) {
         writeFile($issuesFile, \@issuesFileContent);
     }
     else {
         printf("no issues found to set new milestone\n");
-    }    
+    }
 }
 
 
@@ -1745,45 +1927,45 @@ sub helpCmd { # help
 
     my $COMMANDS_HEADER =  "Commands:\n";
 
-    my @COMMANDS_HELP   = ("  init                               prepare current git repository for beeing used with git-fool.\n"               ,
-                           "  new [-c|-p] <title>                create new issue, opionally give -c(omment and parameters) or\n"               ,
-                           "  grep [-m|-l] [<pattern(s)>]        list all issues matching all given patterns or all issues if no\n".
-                           "                                       pattern has been given, short, -m(edium) or -l(ong). If necessary\n".
-                           "                                       escape characters, e.g. a \'.\', and sometimes single quotation\n".
-                           "                                       marks are necessary, e.g. \'0\.3\'. Comments aren\'t grepped but\n".
-                           "                                       email addresses!\n".
-                           "                                       Works similar to 'git-fool ls' but without any tag.\n"                       ,
-                           "  ls [-m|-l] [<tag> [<pattern(s)>]]  show issue with tag, short (default), -m(edium) or -l(ong).\n".
-                           "                                       Given tag will be handled as prefix so usually not the whole\n".
-                           "                                       issue is necessary, e.g. \'1\', \'1/3D\' and \'1/3DES/git\@74th.de\',\n".
-                           "                                       all futher given parameters are used for grepping.\n".
-                           "                                       Works similar to 'git-fool grep' but tag is needed.\n"                       ,
-                           "  edit <tag> [<pattern(s)>]          edit open issue \'tag\', tag can be a prefix but issue must be unique.\n"      ,
-                           "  cp <tag> [<pattern(s)>]            copy issue \'tag\', tag can be a prefix but issue must be unique.\n".
-                           "                                       After copy editing new issue will be started.\n"                             ,
-                           "  rm <tag> [<pattern(s)>]            remove issue \'tag\', tag can be a prefix but issue must be unique.\n".
-                           "                                       A single backup file will be written in fools user directory.\n"             ,
-                           "  close <tag> [<pattern(s)>]         close open issue \'tag\', tag can be a prefix but issue must be unique.\n"     ,
-                           "  reopen <tag> [<pattern(s)>]        reopen issue \'tag\', tag can be a prefix but issue must be unique.\n".
-                           "                                       In most cases it\'s better to copy instead of reopening!\n"                  ,
-                           "  state <state> [<pattern(s)>]       sets state of matched issue to state, issue must be unique.\n".
-                           "                                       Similar to \'git-fool close/reopen\' but only patterns, no tag.\n"           ,
-                           "  milestone [<mlst> [<pattern(s)>]]  without any parameter default milestone is shown, given mlst will\n".
-                           "                                       be set as new default milestone. With given patterns all open issues\n".
-                           "                                       that match will be updated to new milestone.\n".
-                           "                                       A \'\"\"\' pattern matches every milestone and updates all open issues.\n"   ,
-                           "  help [command]                     show this help screen or only that for command if given.\n"                    );
+    my @COMMANDS_HELP   = ("  init                                    prepare current git repository for beeing used with git-fool.\n"               ,
+                           "  new [-c|-p] <title>                     create new issue, opionally give -c(omment and parameters) or\n"               ,
+                           "  grep [-c] [-m|-l] [<pattern(s)>]        list all open issues that match with all given patterns, short, -m(edium)\n".
+                           "                                            or-l(ong). The issues file and comment files are grepped. If necessary\n".
+                           "                                            escape characters, e.g. a \'.\', and sometimes single quotation\n".
+                           "                                            marks are necessary, e.g. \'0\.3\'. Comments aren\'t grepped but\n".
+                           "                                            email addresses!\n".
+                           "                                            To include closed issues as well use optional parameter -c(losed)\n"         ,
+                           "  ls [-c] [-m|-l] [<tag> [<pattern(s)>]]  show all open issues that matches tag and all patterns, short (default),\n".
+                           "                                            -m(edium) or -l(ong). Given tag will be handled as prefix so usually not\n".
+                           "                                            the whole issue is necessary, e.g. \'1/3DES/git\@74th.de\', \'1/3D\' and\n".
+                           "                                            even \'1\', all futher given parameters are used for grepping.\n".
+                           "                                            To include closed issues as well use optional parameter -c(losed)\n"         ,
+                           "  edit <tag> [<pattern(s)>]               edit open issue \'tag\', tag can be a prefix but issue must be unique.\n"      ,
+                           "  cp <tag> [<pattern(s)>]                 copy issue \'tag\', tag can be a prefix but issue must be unique.\n".
+                           "                                            After copy editing new issue will be started.\n"                             ,
+                           "  rm <tag> [<pattern(s)>]                 remove issue \'tag\', tag can be a prefix but issue must be unique.\n".
+                           "                                            A single backup file will be written in fools user directory.\n"             ,
+                           "  close <tag> [<pattern(s)>]              close open issue \'tag\', tag can be a prefix but issue must be unique.\n"     ,
+                           "  reopen <tag> [<pattern(s)>]             reopen issue \'tag\', tag can be a prefix but issue must be unique.\n".
+                           "                                            In most cases it\'s better to copy instead of reopening!\n"                  ,
+                           "  state <state> [<pattern(s)>]            sets state of matched issue to state, issue must be unique.\n".
+                           "                                            Similar to \'git-fool close/reopen\' but only patterns, no tag.\n"           ,
+                           "  milestone [<mlst> [<pattern(s)>]]       without any parameter default milestone is shown, given mlst will\n".
+                           "                                            be set as new default milestone. With given patterns all open issues\n".
+                           "                                            that match will be updated to new milestone.\n".
+                           "                                            A \'\"\"\' pattern matches every milestone and updates all open issues.\n"   ,
+                           "  help [command]                          show this help screen or only that for command if given.\n"                    );
 
-    my %COMMANDS_INDEX  = ("init"      => 0, 
-                           "new"       => 1, 
-                           "grep"      => 2, 
-                           "ls"        => 3, 
-                           "edit"      => 4, 
-                           "cp"        => 5, 
-                           "rm"        => 6, 
-                           "close"     => 7, 
-                           "reopen"    => 8, 
-                           "state"     => 9, 
+    my %COMMANDS_INDEX  = ("init"      => 0,
+                           "new"       => 1,
+                           "grep"      => 2,
+                           "ls"        => 3,
+                           "edit"      => 4,
+                           "cp"        => 5,
+                           "rm"        => 6,
+                           "close"     => 7,
+                           "reopen"    => 8,
+                           "state"     => 9,
                            "milestone" => 10,
                            "help"      => 11);
 
@@ -1796,7 +1978,7 @@ sub helpCmd { # help
                             "  If a command needs one or several patterns they will be used to grep through the whole issue, tag included,\n".
                             "    but without comments.\n".
                             "  pattern(s) means one or many, e.g. \'git-fool edit\' can be called e.g. \'git fool edit <pattern> <pattern> ...\'\n".
-                            "  All tags and patterns are handled as regular expressions!\n".
+                            "  All tags and patterns are handled as regular expressions, and an expected tag can be empty, e.g. \"\"!\n".
                             "  Called commands cannot be made undone, but remember we are inside a repository, and this is a job for git!\n".
                             "  Do not write section like text into comments (e.g. \'[foobar]\'), they will be stored fine but won\'t be\n".
                             "    editable anymore with git-fool default option, you have to edit it into text editor!\n";
@@ -1813,7 +1995,7 @@ sub helpCmd { # help
     }
 
     printf("$FOOL_HEADER\n");
-    
+
     if (defined($command) && defined($COMMANDS_INDEX{$command})) {
         printf("$COMMANDS_HELP[$COMMANDS_INDEX{$command}]\n");
     }
@@ -1825,7 +2007,7 @@ sub helpCmd { # help
         printf("$COMMENTS\n");
         printf("$SETTINGS\n");
     }
-    
+
     if ($exitCode) {
         EXIT($exitCode);
     }

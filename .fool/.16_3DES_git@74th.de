@@ -1,0 +1,8 @@
+a possible updater could be easily made very flexible by updating step by step, e.g. if we have 3 versions v1, v2 and v3 and a given issue file is of version v1 the updater can update to v2 and then again to v3... so it's not necessary to implement all update steps from all older versions to all newer versions, the update can easily check what is the current issue file version and what is the next one up to the newest...
+
+[HISTORY]
+CREATED:  UTC, Jan  6 13:44:36 2014 -by- 3DES/git@74th.de -at- 3ea00d5431217f3551fc4801c24e954c8fa4ee6a
+CHANGED:  UTC, Jan  6 13:49:06 2014 -by- 3DES/git@74th.de -at- 3ea00d5431217f3551fc4801c24e954c8fa4ee6a
+CHANGED:  UTC, Jan  6 13:51:48 2014 -by- 3DES/git@74th.de -at- 3ea00d5431217f3551fc4801c24e954c8fa4ee6a
+CHANGED:  UTC, Jan  6 13:54:04 2014 -by- 3DES/git@74th.de -at- 3ea00d5431217f3551fc4801c24e954c8fa4ee6a
+

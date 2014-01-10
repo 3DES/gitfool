@@ -1,0 +1,10 @@
+to set a responsible person just changing the issue tag would be the easiest way... in the HISTORY the primary id can be found and all others, too, so linking to an issue tag will still work.
+
+Another possibility is just copy the issue to the new user and close the original one...
+ 
+
+[HISTORY]
+CREATED:  UTC, Jan  5 21:45:30 2014 -by- 3DES/git@74th.de -at- 3ea00d5431217f3551fc4801c24e954c8fa4ee6a
+CHANGED:  UTC, Jan  6 13:51:48 2014 -by- 3DES/git@74th.de -at- 3ea00d5431217f3551fc4801c24e954c8fa4ee6a
+CHANGED:  UTC, Jan  6 13:53:47 2014 -by- 3DES/git@74th.de -at- 3ea00d5431217f3551fc4801c24e954c8fa4ee6a
+

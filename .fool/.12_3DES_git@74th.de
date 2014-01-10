@@ -1,0 +1,7 @@
+the handling of a issue line should be done in exactly one function, the result should be an array, and we need some variables that tell us on which array position which value is to be found!
+
+[HISTORY]
+CREATED:  UTC, Jan  5 21:35:52 2014 -by- 3DES/git@74th.de -at- 3ea00d5431217f3551fc4801c24e954c8fa4ee6a
+CHANGED:  UTC, Jan  6 13:51:48 2014 -by- 3DES/git@74th.de -at- 3ea00d5431217f3551fc4801c24e954c8fa4ee6a
+CHANGED:  UTC, Jan  6 13:53:05 2014 -by- 3DES/git@74th.de -at- 3ea00d5431217f3551fc4801c24e954c8fa4ee6a
+
