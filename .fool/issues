@@ -8,7 +8,7 @@
 8/3DES/git@74th.de/Task/open/0.x/colorize output to make it more readable
 9/3DES/git@74th.de/Task/closed/0.x/a possibility to grep through all issues' comments would be helpful
 10/3DES/git@74th.de/Task/open/0.3/when user calls init write sth. on screen, e.g. 'initialized new tracker in <path>'
-11/3DES/git@74th.de/Task/open/0.3/user input line should be editable, use Term::ReadLine::Gnu for this job
+11/3DES/git@74th.de/Task/closed/0.3/user input line should be editable, use Term::ReadLine::Gnu for this job
 12/3DES/git@74th.de/Task/open/0.3/refactoring so that issue line becomes more flexible
 13/3DES/git@74th.de/Task/open/0.x/we need priority support as separate issue line entry
 14/3DES/git@74th.de/Task/open/0.3/new command 'mv' that moves the issue to another person, the responsible one

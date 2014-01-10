@@ -9,6 +9,7 @@ use Getopt::Long;
 use POSIX;
 use Term::ReadKey;
 use File::Path;
+use Term::ReadLine;
 
 
 # debug stuff
@@ -993,10 +994,19 @@ sub handleCommandLine {
                 last;   # finish here in either case... because if we find a parameter a second time it must already be an "arguments pattern"
             }
         }
-        last if (!$matched);    #to prevent "arguments pattern" to be matched as command line switches (e.g. -c, -m, ...) stop matching when first argument doesn't match any possible command line switch
+        last if (!$matched);    #to prevent "arguments pattern" to be matched as command line switches (e.g. -a, -m, ...) stop matching when first argument doesn't match any possible command line switch
     }
 }
 
+
+# git-fool wide uniform input method
+my $terminal = Term::ReadLine->new();
+$terminal->ornaments(0);
+sub inputLine {
+    my ($prompt) = @_;
+
+    return $terminal->readline($prompt);
+}
 
 
 ################################################
@@ -1045,8 +1055,7 @@ sub newCmd {  # new [-c|-p] <title>
 
     if ($arguments[0] eq "-c" || $arguments[0] eq "-p") {
         # reading milestrom from user input
-        printf("Milestone [$userFileContent[$USER_FILE_MILESTONE]]: ");     # pressing just [ENTER] doesn't change default milestone
-        my $newMilestone = <STDIN>;         # read new milestone
+        my $newMilestone = inputLine("Milestone [$userFileContent[$USER_FILE_MILESTONE]]: ");     # pressing just [ENTER] doesn't change default milestone
         normalizeString($newMilestone);     # make a clean string out of it
         if ($newMilestone) {
             $userFileContent[$USER_FILE_MILESTONE] = $newMilestone;
@@ -1054,19 +1063,19 @@ sub newCmd {  # new [-c|-p] <title>
 
         # reading issue type from user input
         while(1) {
-            printf("issue type: ");
+            my $prompt = "issue type: ";
             my $counter = 1;
             foreach my $issue (sort(keys(%ISSUE_TYPES))) {
-                printf("$issue-$ISSUE_TYPES{$issue}");
+                $prompt .= "$issue-$ISSUE_TYPES{$issue}";
                 if ($counter++ < scalar(keys(%ISSUE_TYPES))) {
-                    printf(", ");
+                    $prompt .= ", ";
                 }
                 else {
-                    printf(" [$issueType]: ");  # print default option if user presses just [ENTER]
+                    $prompt .= " [$issueType]: ";  # print default option if user presses just [ENTER]
                 }
             }
 
-            my $newIssueType = <STDIN>;
+            my $newIssueType = inputLine($prompt);
             CHOMP($newIssueType);
             if ($newIssueType =~ /^\d+$/ && $newIssueType >= 0 && $newIssueType < scalar(keys(%ISSUE_TYPES))) {      # valid user input
                 $issueType = $newIssueType;
@@ -1138,7 +1147,7 @@ sub newCmd {  # new [-c|-p] <title>
 
 
 # search for certain issues
-sub grepCmd {   # grep [-c] [-m|-l] [<pattern(s)>]
+sub grepCmd {   # grep [-a] [-m|-l] [<pattern(s)>]
     DEBUG($DEBUG_LOW, "grepCmd()");
     my @arguments = @_;
 
@@ -1146,11 +1155,11 @@ sub grepCmd {   # grep [-c] [-m|-l] [<pattern(s)>]
     my $printSize       = 0;   # 0 -> short, 1 -> medium, 2 -> long
 
     # check command arguments
-    my %commandLineSwitches = ("-c"      => "",
+    my %commandLineSwitches = ("-a"      => "",
                                "(-m|-l)" => "");
 
     handleCommandLine(\%commandLineSwitches, \@arguments);
-    if (!($commandLineSwitches{"-c"})) {
+    if (!($commandLineSwitches{"-a"})) {
         $negativePattern = "^".(".+/" x issueElementPosition("state")).$ISSUE_STATES{"closed"}."/.+\$";
     }
 
@@ -1232,7 +1241,7 @@ sub grepCmd {   # grep [-c] [-m|-l] [<pattern(s)>]
 
 
 # list issue(s)
-sub lsCmd { # ls [-c] [-m|-l] [<tag> [<pattern(s)>]]
+sub lsCmd { # ls [-a] [-m|-l] [<tag> [<pattern(s)>]]
     DEBUG($DEBUG_LOW, "lsCmd()");
     my @arguments = @_;
 
@@ -1240,11 +1249,11 @@ sub lsCmd { # ls [-c] [-m|-l] [<tag> [<pattern(s)>]]
     my $printSize       = 0;   # 0 -> short, 1 -> medium, 2 -> long
 
     # check command arguments
-    my %commandLineSwitches = ("-c"      => "",
+    my %commandLineSwitches = ("-a"      => "",
                                "(-m|-l)" => "");
 
     handleCommandLine(\%commandLineSwitches, \@arguments);
-    if (!($commandLineSwitches{"-c"})) {
+    if (!($commandLineSwitches{"-a"})) {
         $negativePattern = "^".(".+/" x issueElementPosition("state")).$ISSUE_STATES{"closed"}."/.+\$";
     }
 
@@ -1287,17 +1296,24 @@ sub lsCmd { # ls [-c] [-m|-l] [<tag> [<pattern(s)>]]
 
 
 # edit existing issue
-sub editCmd { # edit <tag> [<patterns>]
+sub editCmd { # edit [-c|-p] <tag> [<patterns>]
     DEBUG($DEBUG_LOW, "editCmd()");
     my @arguments = @_;
+    my $editParts = 0x01 | 0x02;  # 0x00 = not used, 0x01 = parameters only (title, milestone, type), 0x02 = comment only, 0x03 = parameters and comment
 
     # check command arguments
-    if (scalar(@arguments) < 1) {
+    if (scalar(@arguments) < 1 || (scalar(@arguments) == 1 && ($arguments[0] eq "-c" || $arguments[0] eq "-p"))) {
         $cmd{"help"}->("edit", "'git-fool edit' parameters mismatch", 255);
     }
+    if ($arguments[0] eq "-c") {
+        $editParts = 0x02;
+        shift(@arguments);
+    }
+    elsif ($arguments[0] eq "-p") {
+        $editParts = 0x01;
+        shift(@arguments);
+    }
 
-    # prepare arguments
-    $arguments[0] = "^".$arguments[0];
 
 ####################################
     testFoolDir();      # check if .fool directory exists (if not init hasn't be called yet!)
@@ -1352,94 +1368,96 @@ sub editCmd { # edit <tag> [<patterns>]
             EXIT(255, "issue is closed, reopen it for editing");
         }
 
-        # reading new title from user input
-        printf("Title [$title]: ");    # pressing just [ENTER] doesn't change original title
-        my $newTitle = <STDIN>;         # read new title
-        normalizeString($newTitle);
-        if (length($newTitle)) {
-            $title = $newTitle;
-            $issueChanged = 1;
-        }
-
-        # reading milestone from user input
-        printf("Milestone [$milestone]: ");     # pressing just [ENTER] doesn't change default milestone
-        my $newMilestone = <STDIN>;   # read new milestone
-        CHOMP($newMilestone);
-        normalizeString($newMilestone);
-        if ($newMilestone) {
-            $milestone = $newMilestone;
-            $issueChanged = 1;
-        }
-
-        # find issue type string and convert it into issue type value
-        while (my($key, $value) = each %ISSUE_TYPES) {
-            if ($value eq $issueType) {
-                $issueType = $key;
-                last;
-            }
-        }
-
-        # reading issue type from user input
-        while(1) {
-            printf("issue type: ");
-            my $counter = 1;
-            foreach my $issue (sort(keys(%ISSUE_TYPES))) {
-                printf("$issue-$ISSUE_TYPES{$issue}");
-                if ($counter++ < scalar(keys(%ISSUE_TYPES))) {
-                    printf(", ");
-                }
-                else {
-                    printf(" [$issueType]: ");  # print default option if user presses just [ENTER]
-                }
-            }
-
-            my $newIssueType = <STDIN>;
-            CHOMP($newIssueType);
-            if ($newIssueType =~ /^\d+$/ && $newIssueType >= 0 && $newIssueType < scalar(keys(%ISSUE_TYPES))) {      # valid user input
-                $issueType = $newIssueType;
+        if ($editParts & 0x01) {
+            # reading new title from user input
+            my $newTitle = inputLine("Title [$title]: ");    # pressing just [ENTER] doesn't change original title
+            normalizeString($newTitle);
+            if (length($newTitle)) {
+                $title = $newTitle;
                 $issueChanged = 1;
-                last;
             }
-            elsif (!$newIssueType) {    # just [ENTER]
-                last;
+    
+            # reading milestone from user input
+            my $newMilestone = inputLine("Milestone [$milestone]: ");     # pressing just [ENTER] doesn't change default milestone
+            CHOMP($newMilestone);
+            normalizeString($newMilestone);
+            if ($newMilestone) {
+                $milestone = $newMilestone;
+                $issueChanged = 1;
             }
-            else {  # invalid user input
-                printf("issue type $newIssueType is not valid!\n");
+    
+            # find issue type string and convert it into issue type value
+            while (my($key, $value) = each %ISSUE_TYPES) {
+                if ($value eq $issueType) {
+                    $issueType = $key;
+                    last;
+                }
+            }
+    
+            # reading issue type from user input
+            while(1) {
+                my $prompt = "issue type: ";
+                my $counter = 1;
+                foreach my $issue (sort(keys(%ISSUE_TYPES))) {
+                    $prompt .= "$issue-$ISSUE_TYPES{$issue}";
+                    if ($counter++ < scalar(keys(%ISSUE_TYPES))) {
+                        $prompt .= ", ";
+                    }
+                    else {
+                        $prompt .= " [$issueType]: ";  # print default option if user presses just [ENTER]
+                    }
+                }
+    
+                my $newIssueType = inputLine($prompt);
+                CHOMP($newIssueType);
+                if ($newIssueType =~ /^\d+$/ && $newIssueType >= 0 && $newIssueType < scalar(keys(%ISSUE_TYPES))) {      # valid user input
+                    $issueType = $newIssueType;
+                    $issueChanged = 1;
+                    last;
+                }
+                elsif (!$newIssueType) {    # just [ENTER]
+                    last;
+                }
+                else {  # invalid user input
+                    printf("issue type $newIssueType is not valid!\n");
+                }
+            }
+    
+            # update issues array and write back issues file if necessary
+            if ($issueChanged) {
+                $issuesFileContent[$lineIndex] = createIssueEntry(getIssueTag($id, $userName, $email), $ISSUE_TYPES{$issueType}, $state, $milestone, $title);
+                writeFile($issuesFile, \@issuesFileContent);
             }
         }
 
-        # update issues array and write back issues file if necessary
-        if ($issueChanged) {
-            $issuesFileContent[$lineIndex] = createIssueEntry(getIssueTag($id, $userName, $email), $ISSUE_TYPES{$issueType}, $state, $milestone, $title);
-            writeFile($issuesFile, \@issuesFileContent);
+        if ($editParts & 0x02) {
+            # read tagged file
+            my ($certainIssueFileName, $certainIssueFile) = getFileName($FILE_NAME_CERTAIN_ISSUE, $id, $userName, $email);
+            my %tagHash = ();
+            if ($certainIssueFile && -s $certainIssueFile) {
+                %tagHash = readTaggedFile($certainIssueFile);
+            }
+            else {
+                EXIT(255, "changed but no comment/history file found: $certainIssueFile");          # @todo: implement autorepair function!?
+            }
+    
+            # write temp file for beeing edited
+            my ($tempFileName, $tempFile) = getFileName($FILE_NAME_TEMP);
+            writeFile($tempFile, $tagHash{"none"});
+    
+            prepareEditor();
+            system("$editor $tempFile");        # open editor to edit temp file
+    
+            my @newComments = readFile($tempFile);
+    
+            # if anything has been changed recreate comment/history file
+            if (!arraysEqual($tagHash{"none"}, \@newComments) || $issueChanged) {
+                $tagHash{"none"} = \@newComments;
+                addHistory($HISTORY_TOKEN_CHANGED, \%tagHash);
+                writeTaggedFile($certainIssueFile, \%tagHash);
+            }
+            unlink($tempFile);
         }
-
-        # read tagged file
-        my ($certainIssueFileName, $certainIssueFile) = getFileName($FILE_NAME_CERTAIN_ISSUE, $id, $userName, $email);
-        my %tagHash = ();
-        if ($certainIssueFile && -s $certainIssueFile) {
-            %tagHash = readTaggedFile($certainIssueFile);
-        }
-        else {
-            EXIT(255, "changed but no comment/history file found: $certainIssueFile");          # @todo: implement autorepair function!?
-        }
-
-        # write temp file for beeing edited
-        my ($tempFileName, $tempFile) = getFileName($FILE_NAME_TEMP);
-        writeFile($tempFile, $tagHash{"none"});
-
-        prepareEditor();
-        system("$editor $tempFile");        # open editor to edit temp file
-
-        my @newComments = readFile($tempFile);
-
-        # if anything has been changed recreate comment/history file
-        if (!arraysEqual($tagHash{"none"}, \@newComments) || $issueChanged) {
-            $tagHash{"none"} = \@newComments;
-            addHistory($HISTORY_TOKEN_CHANGED, \%tagHash);
-            writeTaggedFile($certainIssueFile, \%tagHash);
-        }
-        unlink($tempFile);
     }
     else {
         EXIT(255, "found damaged line in issue file: [$line]");                                 # @todo: implement autorepair function!?
@@ -1448,13 +1466,20 @@ sub editCmd { # edit <tag> [<patterns>]
 
 
 # copy existing issue
-sub cpCmd {   # cp <tag> [<patterns>]
+sub cpCmd {   # cp [-n] <tag> [<patterns>]
     DEBUG($DEBUG_LOW, "cpCmd()");
     my @arguments = @_;
+    my $autoEdit = 1;
 
     # check command arguments
-    if (scalar(@arguments) < 1) {
+    if (scalar(@arguments) < 1 || (scalar(@arguments) == 1 && $arguments[0] eq "-n")) {
         $cmd{"help"}->("cp", "'git-fool cp' parameters mismatch", 255);
+    }
+
+    # with -n auto-edit can be disabled
+    if ($arguments[0] eq "-n") {
+        $autoEdit = 0; 
+        shift(@arguments);
     }
 
     # prepare arguments
@@ -1546,7 +1571,9 @@ sub cpCmd {   # cp <tag> [<patterns>]
         my ($currentIssueFileName, $currentIssueFile) = getFileName($FILE_NAME_CURRENT_ISSUE, $userFileContent[$USER_FILE_ISSUE_COUNTER]);
         writeTaggedFile($currentIssueFile, \%tagHash);
 
-        editCmd($userFileContent[$USER_FILE_ISSUE_COUNTER]);
+        if ($autoEdit) {
+            editCmd("-c", getIssueTag($userFileContent[$USER_FILE_ISSUE_COUNTER], $userName, $email));  # edit comment only
+        }
     }
     else {
         EXIT(255, "found damaged line in issue file: [$line]");                                 # @todo: implement autorepair function!?
@@ -1555,13 +1582,18 @@ sub cpCmd {   # cp <tag> [<patterns>]
 
 
 # change issue state to "state"
-sub stateCmd {    # state <state> <patterns>
+sub stateCmd {    # state [-n] <state> <patterns>
     DEBUG($DEBUG_LOW, "stateCmd()");
     my @arguments = @_;
+    my $autoEdit = 1;
 
     # check command arguments
-    if (scalar(@arguments) < 2 || !($ISSUE_STATES{$arguments[0]})) {
+    if (scalar(@arguments) < 2 || ($arguments[0] ne "-n" && !defined($ISSUE_STATES{$arguments[0]})) || ($arguments[0] eq "-n" && !defined($ISSUE_STATES{$arguments[1]}))) {
         $cmd{"help"}->("state", "'git-fool state' parameters mismatch", 255);
+    }
+    if ($arguments[0] eq "-n") {
+        $autoEdit = 0;
+        shift(@arguments);
     }
     my $newState = shift(@arguments);
 
@@ -1617,6 +1649,11 @@ sub stateCmd {    # state <state> <patterns>
             EXIT(255, "issue already in state $newState");
         }
 
+        # if we close an issue we must edit it before, if not we will edit it after state change because if it is already closed we have to open it first!
+        if ($newState eq "closed" && $autoEdit) {
+            editCmd("-c", getIssueTag($id, $userName, $email));  # edit comment only
+        }
+
         # set issue into closed state
         $issuesFileContent[$lineIndex] = createIssueEntry(getIssueTag($id, $userName, $email), $issueType, $newState, $milestone, $title);
         writeFile($issuesFile, \@issuesFileContent);
@@ -1648,6 +1685,11 @@ sub stateCmd {    # state <state> <patterns>
         if (!$ISSUE_STATES_HISTORY_ENTRY_MATCH{$newState}) {
             EXIT(254, "bug in git-fool, expand %ISSUE_STATES_HISTORY_ENTRY_MATCH!");
         }
+
+        # if new state is not "closed" we edit it here because it could be closed in have been reopened...
+        if ($newState ne "closed" && $autoEdit) {
+            editCmd("-c", getIssueTag($id, $userName, $email));  # edit comment only
+        }
     }
     else {
         EXIT(255, "found damaged line in issue file: [$line]");                                 # @todo: implement autorepair function!?
@@ -1656,37 +1698,53 @@ sub stateCmd {    # state <state> <patterns>
 
 
 # close an open issue
-sub closeCmd {    # close <tag> [<patterns>]
+sub closeCmd {    # close [-n] <tag> [<patterns>]
     DEBUG($DEBUG_LOW, "closeCmd()");
     my @arguments = @_;
 
     # check command arguments
-    if (scalar(@arguments) < 1) {
+    if (scalar(@arguments) < 1 || (scalar(@arguments) == 1 && $arguments[0] eq "-n")) {
         $cmd{"help"}->("close", "'git-fool close' parameters mismatch", 255);
     }
 
     # prepare arguments
-    $arguments[0] = "^".$arguments[0];
+    my @headArguments = ();
+    if ($arguments[0] eq "-n") {
+        $arguments[1] = "^".$arguments[1];
+        push(@headArguments, shift(@arguments));
+    }
+    else {
+        $arguments[0] = "^".$arguments[0];
+    }
+    push(@headArguments, $ISSUE_STATES{"closed"});
 
     # now call stateCmd() it will do the rest
-    $cmd{"state"}->($ISSUE_STATES{"closed"}, @arguments);
+    $cmd{"state"}->(@headArguments, @arguments);
 }
 
 # reopen an already closed issue again
-sub reopenCmd {   # reopen <tag> [<patterns>]
+sub reopenCmd {   # reopen [-n] <tag> [<patterns>]
     DEBUG($DEBUG_LOW, "reopenCmd()");
     my @arguments = @_;
 
     # check command arguments
-    if (scalar(@arguments) < 1) {
+    if (scalar(@arguments) < 1 || (scalar(@arguments) == 1 && $arguments[0] eq "-n")) {
         $cmd{"help"}->("reopen", "'git-fool reopen' parameters mismatch", 255);
     }
 
     # prepare arguments
-    $arguments[0] = "^".$arguments[0];
+    my @headArguments = ();
+    if ($arguments[0] eq "-n") {
+        $arguments[1] = "^".$arguments[1];
+        push(@headArguments, shift(@arguments));
+    }
+    else {
+        $arguments[0] = "^".$arguments[0];
+    }
+    push(@headArguments, $ISSUE_STATES{"open"});
 
     # now call stateCmd() it will do the rest
-    $cmd{"state"}->($ISSUE_STATES{"open"}, @arguments);
+    $cmd{"state"}->(@headArguments, @arguments);
 }
 
 
@@ -1929,26 +1987,27 @@ sub helpCmd { # help
 
     my @COMMANDS_HELP   = ("  init                                    prepare current git repository for beeing used with git-fool.\n"               ,
                            "  new [-c|-p] <title>                     create new issue, opionally give -c(omment and parameters) or\n"               ,
-                           "  grep [-c] [-m|-l] [<pattern(s)>]        list all open issues that match with all given patterns, short, -m(edium)\n".
+                           "  grep [-a] [-m|-l] [<pattern(s)>]        list all open issues that match with all given patterns, short, -m(edium)\n".
                            "                                            or-l(ong). The issues file and comment files are grepped. If necessary\n".
                            "                                            escape characters, e.g. a \'.\', and sometimes single quotation\n".
                            "                                            marks are necessary, e.g. \'0\.3\'. Comments aren\'t grepped but\n".
                            "                                            email addresses!\n".
-                           "                                            To include closed issues as well use optional parameter -c(losed)\n"         ,
-                           "  ls [-c] [-m|-l] [<tag> [<pattern(s)>]]  show all open issues that matches tag and all patterns, short (default),\n".
+                           "                                            To include closed issues as well use optional parameter -a(ll)\n"         ,
+                           "  ls [-a] [-m|-l] [<tag> [<pattern(s)>]]  show all open issues that matches tag and all patterns, short (default),\n".
                            "                                            -m(edium) or -l(ong). Given tag will be handled as prefix so usually not\n".
                            "                                            the whole issue is necessary, e.g. \'1/3DES/git\@74th.de\', \'1/3D\' and\n".
                            "                                            even \'1\', all futher given parameters are used for grepping.\n".
-                           "                                            To include closed issues as well use optional parameter -c(losed)\n"         ,
-                           "  edit <tag> [<pattern(s)>]               edit open issue \'tag\', tag can be a prefix but issue must be unique.\n"      ,
-                           "  cp <tag> [<pattern(s)>]                 copy issue \'tag\', tag can be a prefix but issue must be unique.\n".
+                           "                                            To include closed issues as well use optional parameter -a(ll)\n"         ,
+                           "  edit [-c|-p] <tag> [<pattern(s)>]       edit open issue \'tag\', tag can be a prefix but issue must be unique.\n".
+                           "                                            Edit only -c(omments) or only -p(arameters) or both\n",
+                           "  cp [-n] <tag> [<pattern(s)>]            copy issue \'tag\', tag can be a prefix but issue must be unique.\n".
                            "                                            After copy editing new issue will be started.\n"                             ,
                            "  rm <tag> [<pattern(s)>]                 remove issue \'tag\', tag can be a prefix but issue must be unique.\n".
                            "                                            A single backup file will be written in fools user directory.\n"             ,
-                           "  close <tag> [<pattern(s)>]              close open issue \'tag\', tag can be a prefix but issue must be unique.\n"     ,
-                           "  reopen <tag> [<pattern(s)>]             reopen issue \'tag\', tag can be a prefix but issue must be unique.\n".
+                           "  close [-n] <tag> [<pattern(s)>]         close open issue \'tag\', tag can be a prefix but issue must be unique.\n"     ,
+                           "  reopen [-n] <tag> [<pattern(s)>]        reopen issue \'tag\', tag can be a prefix but issue must be unique.\n".
                            "                                            In most cases it\'s better to copy instead of reopening!\n"                  ,
-                           "  state <state> [<pattern(s)>]            sets state of matched issue to state, issue must be unique.\n".
+                           "  state [-n] <state> [<pattern(s)>]       sets state of matched issue to state, issue must be unique.\n".
                            "                                            Similar to \'git-fool close/reopen\' but only patterns, no tag.\n"           ,
                            "  milestone [<mlst> [<pattern(s)>]]       without any parameter default milestone is shown, given mlst will\n".
                            "                                            be set as new default milestone. With given patterns all open issues\n".
