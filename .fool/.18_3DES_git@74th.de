@@ -1,0 +1,13 @@
+latest issue number of current user should be stored within git config... this ensures that independent form checked
+out branch the issue number will be uniqe for every user.
+
+problem with issue number stored within git config could be that if a user looses its local settings its a little bit hard to find the propper issue number... in this case all .fool/issues file versions have to be checked for latest issue number of current user.
+
+milestone should be handled within user file because usually with several branches the developer 
+works on different versions, e.g. next milestone and current service pack or several service packs at the same time
+and so he/she would always have to change default milestone.
+
+[HISTORY]
+CREATED:     UTC, Jan 17 22:00:56 2014 -by- 3DES/git@74th.de -at- 5ada6bdd10d9535e80f442d021e26e1bc9800725
+CHANGED:     UTC, Jan 17 22:05:42 2014 -by- 3DES/git@74th.de -at- 5ada6bdd10d9535e80f442d021e26e1bc9800725
+

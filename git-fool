@@ -2,7 +2,6 @@
 
 use strict;
 use warnings;
-use Git::Repository;
 use Data::Dumper;
 use Cwd;
 use Getopt::Long;
@@ -18,10 +17,6 @@ my $DEBUG_LOW   = 1;
 my $DEBUG_MED   = 2;
 my $DEBUG_HIGH  = 3;
 my $DEBUG       = $DEBUG_NONE;
-
-
-# some necessary global variables
-my $repository;
 
 
 # some possibly necessary global variables (because of performance only filled when needed!)
@@ -155,6 +150,33 @@ my %ISSUE_ELEMENT_POSITION = ("value"       => 0,
 #}
 
 
+# prints error on screen
+sub ERROR($) {
+    my ($message) = @_;
+
+    # usually error 255 is an error from OS or user input
+    #         error 254 is an internal error and needs to fix git-fool
+    printf("error: $message\n");
+}
+
+
+# extended exit function
+sub EXIT($;$) {
+    DEBUG($DEBUG_MED, "EXIT()");
+    my ($exitCode, $message) = @_;
+
+    if (defined($message)) {
+        if ($exitCode) {
+            ERROR($message."\n");
+        }
+        else {
+            printf("$message\n\n");
+        }
+    }
+    exit($exitCode);
+}
+
+
 # print string as hex
 sub printHex($) {
     my ($string) = @_;
@@ -182,9 +204,20 @@ sub arraysEqual($$) {
 
 
 # own chomp() version
-sub CHOMP(\$) {
-    my ($stringRef) = @_;
-    ${$stringRef} =~ s/[\x0A\x0D]+$//;
+sub CHOMP {
+    my ($ref) = @_;
+    
+    if (ref($ref) eq "ARRAY") {
+        for (my $i = 0; $i < scalar(@$ref); $i++) {
+            ${$ref}[$i] =~ s/[\x0A\x0D]+$//;
+        }
+    }
+    elsif (ref($ref) eq "SCALAR") {
+        ${$ref} =~ s/[\x0A\x0D]+$//;
+    }
+    else {
+        EXIT(254, "internal error - CHOMP() only supports array and scalar refs, nth. else!");
+    }
 }
 
 
@@ -221,30 +254,32 @@ sub DEBUG($$) {
 }
 
 
-# prints error on screen
-sub ERROR($) {
-    my ($message) = @_;
+# git interface
+sub git {
+    my ($command, $expectedLines) = @_;
+    
+    #printf("git command: $command\n");
+    
+    my @result = `git $command 2>&1`;
 
-    # usually error 255 is an error from OS or user input
-    #         error 254 is an internal error and needs to fix git-fool
-    printf("error: $message\n");
-}
+    CHOMP(\@result);
 
-
-# extended exit function
-sub EXIT($;$) {
-    DEBUG($DEBUG_MED, "EXIT()");
-    my ($exitCode, $message) = @_;
-
-    if (defined($message)) {
-        if ($exitCode) {
-            ERROR($message."\n");
+    if ($expectedLines) {
+        if (scalar(@result) == $expectedLines) {
+            if ($expectedLines == 1) {
+                return $result[0];
+            }
+            else {
+                return @result;
+            }
         }
         else {
-            printf("$message\n\n");
+            print Dumper (@result);
+            EXIT(255, "received more from git than expected!");
         }
     }
-    exit($exitCode);
+
+    return @result;
 }
 
 
@@ -255,8 +290,7 @@ sub prepareUserName($) {
 
     # only if $userName is not yet set because of performance reaseons!
     if (!$userName) {
-        $repository = Git::Repository->new() if (!defined($repository));
-        $userName = $repository->run("config", "user.name");
+        $userName = git("config user.name", 1);
 
         # user.name must be set to make git fool working!
         if (!$userName && $errorHandling) {
@@ -280,8 +314,8 @@ sub prepareEmail($) {
 
     # only if $email is not yet set because of performance reaseons!
     if (!$email) {
-        $repository = Git::Repository->new() if (!defined($repository));
-        $email    = $repository->run("config", "user.email");
+        $email = git("config user.email", 1);
+
         if (!$email && $errorHandling) {
             EXIT(255, "user.email not set in git!");
         }
@@ -295,8 +329,7 @@ sub prepareEditor() {
 
     # only if $editor is not yet set because of performance reaseons!
     if (!$editor) {
-        $repository = Git::Repository->new() if (!defined($repository));
-        $editor   = $repository->run("config", "core.editor");
+        $editor = git("config core.editor", 1);
         if (!$editor) {
             $editor = "vi";
         }
@@ -310,8 +343,14 @@ sub prepareCheckout($) {
     my ($errorHandling) = @_;
 
     if (!$checkout) {
-        $repository = Git::Repository->new() if (!defined($repository));
-        $checkout = $repository->run("rev-parse", "HEAD");
+        my @checkout = git("rev-parse HEAD");   # usually answer contains only one line but if repository dosen't exist or is a new one we will get some error messages!
+        if (scalar(@checkout) != 1) {
+            $checkout = "\"not within checkout\"";
+        }
+        else {
+            $checkout = $checkout[0];
+        }
+
         if (!$checkout && $errorHandling) {
             EXIT(255, "git-fool needs a valid checkout!");
         }
@@ -615,7 +654,7 @@ sub readFile($) {
         my $FH;
         open($FH, "<", $fileName) || EXIT(255, "cannot open $fileName: $!");
         while (<$FH>) {
-            CHOMP($_);
+            CHOMP(\$_);
             push(@fileContent, $_);
         }
         close($FH);
@@ -2129,9 +2168,10 @@ sub helpCmd { # help
     my $COMMANDS_HEADER =  "Commands:\n";
 
     my @COMMANDS_HELP   = ("  init                                    prepare current git repository for beeing used with git-fool.\n"                  ,
-                           "  new [-c|-p] <title>                     create new issue, opionally give -c(omment and parameters) or\n"                  ,
+                           "  new [-c|-p] <title>                     create new issue, opionally give -c(omment and parameters) or\n".
+                           "                                            -p(arameters) only\n"                                                           ,
                            "  grep [-a] [-m|-l] [<pattern(s)>]        list all open issues that match with all given patterns, short, -m(edium)\n".
-                           "                                            or-l(ong). The issues file and comment files are grepped. If necessary\n".
+                           "                                            or -l(ong). The issues file and comment files are grepped. If necessary\n".
                            "                                            escape characters, e.g. a \'.\', and sometimes single quotation\n".
                            "                                            marks are necessary, e.g. \'0\.3\'. Comments aren\'t grepped but\n".
                            "                                            email addresses!\n".
@@ -2223,6 +2263,19 @@ sub helpCmd { # help
     }
 }
 
+
+sub dosth {
+    my ($ref) = @_;
+    
+    print ref($ref)."\n";
+    
+    if (ref($ref) eq "ARRAY") {
+        print("got array\n");
+    }
+    if (ref($ref) eq "SCALAR") {
+        print("got scalar\n");
+    }
+}
 
 # just for testing...
 sub dummyCmd {
