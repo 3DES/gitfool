@@ -47,6 +47,7 @@ my %cmd = ("init"      => \&initCmd,           # $cmd{"init"}->(...)
            "ls"        => \&lsCmd,
            "edit"      => \&editCmd,
            "cp"        => \&cpCmd,
+           "mv"        => \&mvCmd,
            "state"     => \&stateCmd,
            "close"     => \&closeCmd,
            "reopen"    => \&reopenCmd,
@@ -92,14 +93,18 @@ my $HISTORY_TOKEN_CHANGED   = 2;
 my $HISTORY_TOKEN_CLOSED    = 3;
 my $HISTORY_TOKEN_REOPENED  = 4;
 my $HISTORY_TOKEN_REPAIRED  = 5;
+my $HISTORY_TOKEN_MOVEDTO   = 6;
+my $HISTORY_TOKEN_MOVEDFROM = 7;
 my $HISTORY_TOKEN_UNKNOWN   = 0xFF;
-my %HISTORY_TOKENS = ( $HISTORY_TOKEN_CREATED   =>  "CREATED:  ",   # usually first entry in history file
-                       $HISTORY_TOKEN_COPIED    =>  "COPIED:   ",   # if this exists in history file it's usually the first entry because it's a copy of another issue
-                       $HISTORY_TOKEN_CHANGED   =>  "CHANGED:  ",
-                       $HISTORY_TOKEN_CLOSED    =>  "CLOSED:   ",
-                       $HISTORY_TOKEN_REOPENED  =>  "REOPENED: ",
-                       $HISTORY_TOKEN_REPAIRED  =>  "REPAIRED: ",   # if this exists in history file it's usually the first entry because original file has been lost
-                       $HISTORY_TOKEN_UNKNOWN   =>  "UNKNOWN:  ",
+my %HISTORY_TOKENS = ( $HISTORY_TOKEN_CREATED    =>  "CREATED:     ",   # usually first entry in history file
+                       $HISTORY_TOKEN_COPIED     =>  "COPIED:      ",   # if this exists in history file it's usually the first entry because it's a copy of another issue
+                       $HISTORY_TOKEN_CHANGED    =>  "CHANGED:     ",
+                       $HISTORY_TOKEN_CLOSED     =>  "CLOSED:      ",
+                       $HISTORY_TOKEN_REOPENED   =>  "REOPENED:    ",
+                       $HISTORY_TOKEN_REPAIRED   =>  "REPAIRED:    ",   # if this exists in history file it's usually the first entry because original file has been lost
+                       $HISTORY_TOKEN_MOVEDTO    =>  "MOVED_TO:    ",
+                       $HISTORY_TOKEN_MOVEDFROM  =>  "MOVED_FROM:  ",   # if this exists in history file it's usually the first entry because it's a copy of another issue (original one has been closed during move process!)
+                       $HISTORY_TOKEN_UNKNOWN    =>  "UNKNOWN:     ",
                      );
 
 
@@ -1480,7 +1485,7 @@ sub cpCmd {   # cp [-n] <tag> [<patterns>]
 
     # with -n auto-edit can be disabled
     if ($arguments[0] eq "-n") {
-        $autoEdit = 0; 
+        $autoEdit = 0;
         shift(@arguments);
     }
 
@@ -1553,7 +1558,7 @@ sub cpCmd {   # cp [-n] <tag> [<patterns>]
         my $newIssue = createIssueEntry(getIssueTag($userFileContent[$USER_FILE_ISSUE_COUNTER], $userName, $email), $issueType, $ISSUE_STATES{"open"}, $userFileContent[$USER_FILE_MILESTONE], $title);
         appendFile($issuesFile, [$newIssue]);
 
-        printf("to... ".(getShortIssueTag($userFileContent[$USER_FILE_ISSUE_COUNTER], $userName))."\n\n\n");
+        printf("to... ".(getShortIssueTag($userFileContent[$USER_FILE_ISSUE_COUNTER], $userName))."\n\n");
 
         # read history file from original issue
         my ($certainIssueFileName, $certainIssueFile) = getFileName($FILE_NAME_CERTAIN_ISSUE, $issueValue, $issueUserName, $issueEmail);
@@ -1568,6 +1573,141 @@ sub cpCmd {   # cp [-n] <tag> [<patterns>]
         # replace original [HISTORY] section
         $tagHash{$HISTORY_FILE_SECTIONS{$HISTORY_FILE_SECTION_HISTORY}} = [];
         addHistory($HISTORY_TOKEN_COPIED, \%tagHash, "from ".getIssueTag($issueValue, $issueUserName, $issueEmail));
+
+        # write history file of new issue
+        my ($currentIssueFileName, $currentIssueFile) = getFileName($FILE_NAME_CURRENT_ISSUE, $userFileContent[$USER_FILE_ISSUE_COUNTER]);
+        writeTaggedFile($currentIssueFile, \%tagHash);
+
+        if ($autoEdit) {
+            editCmd("-c", getIssueTag($userFileContent[$USER_FILE_ISSUE_COUNTER], $userName, $email));  # edit comment only
+        }
+    }
+    else {
+        EXIT(255, "found damaged line in issue file: [$line]");                                 # @todo: implement autorepair function!?
+    }
+}
+
+
+
+
+# move existing issue
+sub mvCmd {   # mv [-n] <tag> [<patterns>]
+    DEBUG($DEBUG_LOW, "cpCmd()");
+    my @arguments = @_;
+    my $autoEdit = 1;
+
+    # check command arguments
+    if (scalar(@arguments) < 1 || (scalar(@arguments) == 1 && $arguments[0] eq "-n")) {
+        $cmd{"help"}->("mv", "'git-fool mv' parameters mismatch", 255);
+    }
+
+    # with -n auto-edit can be disabled
+    if ($arguments[0] eq "-n") {
+        $autoEdit = 0;
+        shift(@arguments);
+    }
+
+    # prepare arguments
+    $arguments[0] = "^".$arguments[0];
+
+####################################
+    testFoolDir();      # check if .fool directory exists (if not init hasn't be called yet!)
+
+    # read issues file
+    my @issuesFileContent = readFile($issuesFile);
+    if (!@issuesFileContent) {
+        printf("issue file is empty!\n");
+        return;
+    }
+
+    # find candidates
+    my $foundListRef = matchPatterns(\@issuesFileContent, \@arguments);
+####################################
+
+    # if only one element found print it always long
+    if (scalar(@{$foundListRef}) == 0) {
+        EXIT(255, "given issue not found");
+    }
+    elsif(scalar(@{$foundListRef}) > 1) {
+        ERROR("more than one issue matches, please restrict search\n");
+        printIndexedIssueList(\@issuesFileContent, $foundListRef, 0);
+        EXIT(255);
+    }
+
+    # now take the only candidate
+    my $lineIndex = ${$foundListRef}[0];
+
+    printf("copy...\n");
+    printIssue($issuesFileContent[$lineIndex], 0, 1);
+    printf("\n");
+
+    # prepare user directory if necessary because we need it for the issue's user id
+    prepareUserDir();
+
+    # reading latest issue value and milestone from user file
+    my @userFileContent = readFile($userFile);
+
+    # checking issue value read from file
+    if ($userFileContent[$USER_FILE_ISSUE_COUNTER] !~ /^\d+$/) {
+        EXIT(255, "$userFile contains invalid latest value!");                                  # @todo: implement autorepair function!?
+    }
+    $userFileContent[$USER_FILE_ISSUE_COUNTER]++; # increment for current issue
+
+    # checking milestone read from file
+    if (!length($userFileContent[$USER_FILE_MILESTONE])) {
+        EXIT(255, "$userFile contains invalid milestone value!");                               # @todo: implement autorepair function!?
+    }
+
+    # prepare necessary strings (for HISTORY because for the issue we take all information from the issue itself otherwise a user cannot change an issue from another sb. else!)
+    prepareEmail(1);
+    prepareUserName(1);
+    prepareCheckout(1);
+
+    # now scan and handle line
+    my $line = $issuesFileContent[$lineIndex];
+    if ($line =~ /^([^\/]+)\/([^\/]+)\/([^\/]+)\/([^\/]+)\/([^\/]+)\/([^\/]+)\/(.+)$/) {
+        # process with line elements
+        my ($issueValue, $issueUserName, $issueEmail, $issueType, $state, $issueMilestone, $title) = ($1, $2, $3, $4, $5, $6, $7);
+
+        # check if issue is in open state
+        if ($state eq $ISSUE_STATES{"closed"}) {
+            EXIT(255, "issue already closed, used cp command instead");
+        }
+
+        # if auto edit is not disabled edit original issue now before it gets closed
+        if ($autoEdit) {
+            editCmd("-c", getIssueTag($issueValue, $issueUserName, $issueEmail));  # edit comment only
+        }
+
+        # set issue into closed state and write issues file back
+        $issuesFileContent[$lineIndex] = createIssueEntry(getIssueTag($issueValue, $issueUserName, $issueEmail), $issueType, $ISSUE_STATES{"closed"}, $issueMilestone, $title);
+        writeFile($issuesFile, \@issuesFileContent);
+
+        # update .fool/<user>/<email> file
+        writeFile($userFile, \@userFileContent);
+
+        # write new issue into issues file (id, user name, email will be set to current user, state will be set to open and current default milestone will be used!)
+        my $newIssue = createIssueEntry(getIssueTag($userFileContent[$USER_FILE_ISSUE_COUNTER], $userName, $email), $issueType, $ISSUE_STATES{"open"}, $userFileContent[$USER_FILE_MILESTONE], $title);
+        appendFile($issuesFile, [$newIssue]);
+
+        printf("to... ".(getShortIssueTag($userFileContent[$USER_FILE_ISSUE_COUNTER], $userName))."\n\n");
+
+        # read history file from original issue
+        my ($certainIssueFileName, $certainIssueFile) = getFileName($FILE_NAME_CERTAIN_ISSUE, $issueValue, $issueUserName, $issueEmail);
+        my %tagHash = ();
+        if ($certainIssueFile && -s $certainIssueFile) {
+            %tagHash = readTaggedFile($certainIssueFile);
+        }
+        else {
+            EXIT(255, "copied but no comment/history file found: $certainIssueFile");           # @todo: implement autorepair function!?
+        }
+        addHistory($HISTORY_TOKEN_MOVEDTO, \%tagHash, "to ".getIssueTag($userFileContent[$USER_FILE_ISSUE_COUNTER], $userName, $email));
+        addHistory($HISTORY_TOKEN_CLOSED,  \%tagHash, "original state was \"$ISSUE_STATES_HISTORY_ENTRY_MATCH{$state}\"");
+        writeTaggedFile($certainIssueFile, \%tagHash);
+
+        # replace original [HISTORY] section
+        $tagHash{$HISTORY_FILE_SECTIONS{$HISTORY_FILE_SECTION_HISTORY}} = [];
+        addHistory($HISTORY_TOKEN_MOVEDFROM, \%tagHash, "from ".getIssueTag($issueValue, $issueUserName, $issueEmail));
 
         # write history file of new issue
         my ($currentIssueFileName, $currentIssueFile) = getFileName($FILE_NAME_CURRENT_ISSUE, $userFileContent[$USER_FILE_ISSUE_COUNTER]);
@@ -1652,15 +1792,15 @@ sub stateCmd {    # state [-n] <state> <patterns>
         }
 
         # if we close an issue we must edit it before, if not we will edit it after state change because if it is already closed we have to open it first!
-        if ($newState eq "closed" && $autoEdit) {
+        if ($ISSUE_STATES{$newState} eq $ISSUE_STATES{"closed"} && $autoEdit) {
             editCmd("-c", getIssueTag($id, $userName, $email));  # edit comment only
         }
 
-        # set issue into closed state
-        $issuesFileContent[$lineIndex] = createIssueEntry(getIssueTag($id, $userName, $email), $issueType, $newState, $milestone, $title);
+        # set issue into new state
+        $issuesFileContent[$lineIndex] = createIssueEntry(getIssueTag($id, $userName, $email), $issueType, $ISSUE_STATES{$newState}, $milestone, $title);
         writeFile($issuesFile, \@issuesFileContent);
 
-        printf("change state from $state to $newState...\n");
+        printf("change state from $state to $ISSUE_STATES{$newState}...\n");
         printIssue($issuesFileContent[$lineIndex], 0, 1);
         printf("\n");
 
@@ -1678,10 +1818,11 @@ sub stateCmd {    # state [-n] <state> <patterns>
         my $historyTag;
 
         if ($ISSUE_STATES_HISTORY_ENTRY_MATCH{$newState}) {
-            addHistory($ISSUE_STATES_HISTORY_ENTRY_MATCH{$newState}, \%tagHash);
+            addHistory($ISSUE_STATES_HISTORY_ENTRY_MATCH{$newState}, \%tagHash, "original state was \"$ISSUE_STATES_HISTORY_ENTRY_MATCH{$state}\"");
         }
         else {
-            addHistory($HISTORY_TOKEN_UNKNOWN, \%tagHash);
+            addHistory($HISTORY_TOKEN_UNKNOWN, \%tagHash, "original state was \"$ISSUE_STATES_HISTORY_ENTRY_MATCH{$state}\"");
+            # @todo: error handling here because there is no token for the new state?
         }
         writeTaggedFile($certainIssueFile, \%tagHash);
         if (!$ISSUE_STATES_HISTORY_ENTRY_MATCH{$newState}) {
@@ -1689,7 +1830,7 @@ sub stateCmd {    # state [-n] <state> <patterns>
         }
 
         # if new state is not "closed" we edit it here because it could be closed in have been reopened...
-        if ($newState ne "closed" && $autoEdit) {
+        if ($ISSUE_STATES{$newState} ne $ISSUE_STATES{"closed"} && $autoEdit) {
             editCmd("-c", getIssueTag($id, $userName, $email));  # edit comment only
         }
     }
@@ -1987,34 +2128,41 @@ sub helpCmd { # help
 
     my $COMMANDS_HEADER =  "Commands:\n";
 
-    my @COMMANDS_HELP   = ("  init                                    prepare current git repository for beeing used with git-fool.\n"               ,
-                           "  new [-c|-p] <title>                     create new issue, opionally give -c(omment and parameters) or\n"               ,
+    my @COMMANDS_HELP   = ("  init                                    prepare current git repository for beeing used with git-fool.\n"                  ,
+                           "  new [-c|-p] <title>                     create new issue, opionally give -c(omment and parameters) or\n"                  ,
                            "  grep [-a] [-m|-l] [<pattern(s)>]        list all open issues that match with all given patterns, short, -m(edium)\n".
                            "                                            or-l(ong). The issues file and comment files are grepped. If necessary\n".
                            "                                            escape characters, e.g. a \'.\', and sometimes single quotation\n".
                            "                                            marks are necessary, e.g. \'0\.3\'. Comments aren\'t grepped but\n".
                            "                                            email addresses!\n".
-                           "                                            To include closed issues as well use optional parameter -a(ll)\n"         ,
+                           "                                            To include closed issues as well use optional parameter -a(ll)\n"               ,
                            "  ls [-a] [-m|-l] [<tag> [<pattern(s)>]]  show all open issues that matches tag and all patterns, short (default),\n".
                            "                                            -m(edium) or -l(ong). Given tag will be handled as prefix so usually not\n".
                            "                                            the whole issue is necessary, e.g. \'1/3DES/git\@74th.de\', \'1/3D\' and\n".
                            "                                            even \'1\', all futher given parameters are used for grepping.\n".
-                           "                                            To include closed issues as well use optional parameter -a(ll)\n"         ,
+                           "                                            To include closed issues as well use optional parameter -a(ll)\n"               ,
                            "  edit [-c|-p] <tag> [<pattern(s)>]       edit open issue \'tag\', tag can be a prefix but issue must be unique.\n".
-                           "                                            Edit only -c(omments) or only -p(arameters) or both\n",
+                           "                                            Edit only -c(omments) or only -p(arameters) or both\n"                          ,
                            "  cp [-n] <tag> [<pattern(s)>]            copy issue \'tag\', tag can be a prefix but issue must be unique.\n".
-                           "                                            After copy editing new issue will be started.\n"                             ,
+                           "                                            After copy new issue can be edited if not switched off with -n(o edit).\n"      ,
+                           "  mv [-n] <tag> [<pattern(s)>]            copy issue \'tag\' to new issue with current user / current tag.\n".
+                           "                                            \'tag\' can be a prefix but issue must be unique. After copy is done, the\n".
+                           "                                            original issue is closed and the new one can be edited if not switched off\n".
+                           "                                            with -n(o edit).\n"                                                             ,
                            "  rm <tag> [<pattern(s)>]                 remove issue \'tag\', tag can be a prefix but issue must be unique.\n".
-                           "                                            A single backup file will be written in fools user directory.\n"             ,
-                           "  close [-n] <tag> [<pattern(s)>]         close open issue \'tag\', tag can be a prefix but issue must be unique.\n"     ,
+                           "                                            A single backup file will be written in fools user directory.\n"                ,
+                           "  close [-n] <tag> [<pattern(s)>]         close open issue \'tag\', tag can be a prefix but issue must be unique.\n".
+                           "                                            Before closed issue can be edited if not switched off with -n(o edit).\n"       ,
                            "  reopen [-n] <tag> [<pattern(s)>]        reopen issue \'tag\', tag can be a prefix but issue must be unique.\n".
-                           "                                            In most cases it\'s better to copy instead of reopening!\n"                  ,
+                           "                                            After reopened issue can be edited if not switched off with -n(o edit).\n".
+                           "                                            In most cases it\'s better to copy instead of reopening!\n"                     ,
                            "  state [-n] <state> [<pattern(s)>]       sets state of matched issue to state, issue must be unique.\n".
-                           "                                            Similar to \'git-fool close/reopen\' but only patterns, no tag.\n"           ,
+                           "                                            During state change issue can be edited if not switched off with -n(o edit).\n".
+                           "                                            Similar to \'git-fool close/reopen\' but only patterns, no tag.\n"              ,
                            "  milestone [<mlst> [<pattern(s)>]]       without any parameter default milestone is shown, given mlst will\n".
                            "                                            be set as new default milestone. With given patterns all open issues\n".
                            "                                            that match will be updated to new milestone.\n".
-                           "                                            A \'\"\"\' pattern matches every milestone and updates all open issues.\n"   ,
+                           "                                            A \'\"\"\' pattern matches every milestone and updates all open issues.\n"      ,
                            "  help [command]                          show this help screen or only that for command if given.\n"                    );
 
     my %COMMANDS_INDEX  = ("init"      => 0,
@@ -2023,12 +2171,13 @@ sub helpCmd { # help
                            "ls"        => 3,
                            "edit"      => 4,
                            "cp"        => 5,
-                           "rm"        => 6,
-                           "close"     => 7,
-                           "reopen"    => 8,
-                           "state"     => 9,
-                           "milestone" => 10,
-                           "help"      => 11);
+                           "mv"        => 6,
+                           "rm"        => 7,
+                           "close"     => 8,
+                           "reopen"    => 9,
+                           "state"     => 10,
+                           "milestone" => 11,
+                           "help"      => 12);
 
 
     my $COMMENTS        =   "Comments:\n".
