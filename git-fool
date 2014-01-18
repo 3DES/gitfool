@@ -123,8 +123,8 @@ my %ISSUE_STATES_HISTORY_ENTRY_MATCH = ($ISSUE_STATES{"open"}   => $HISTORY_TOKE
 
 
 # define user file elements
-my $USER_FILE_ISSUE_COUNTER = 0;    # means to be found in line 0
-my $USER_FILE_MILESTONE     = 1;    # means to be found in line 1
+my $USER_FILE_RESERVED_VALUE = 0;    # means to be found in line 0  (this was user issue value but now it's just reserved because issue value is stored within "git config" now!)
+my $USER_FILE_MILESTONE      = 1;    # means to be found in line 1
 
 
 # issue element position
@@ -222,7 +222,7 @@ sub CHOMP {
 
 
 # usually used with title where not all characters are possible
-sub normalizeString(\$) {
+sub normalizeString {
     my ($titleRef) = @_;
 
     CHOMP($titleRef);
@@ -260,26 +260,28 @@ sub git {
     
     #printf("git command: $command\n");
     
+    # execute git command and chomp new lines
     my @result = `git $command 2>&1`;
-
     CHOMP(\@result);
 
-    if ($expectedLines) {
-        if (scalar(@result) == $expectedLines) {
-            if ($expectedLines == 1) {
-                return $result[0];
-            }
-            else {
-                return @result;
-            }
-        }
-        else {
-            print Dumper (@result);
-            EXIT(255, "received more from git than expected!");
-        }
+    # if expected lines are given check if we have received what we expected
+    if ($expectedLines && scalar(@result) != $expectedLines) {
+        print Dumper (@result);
+        #EXIT(255, "received not what we expected from git (".scalar(@result)." lines)!");
+        printf("did not received what we expected from git (".scalar(@result)." lines)!\n");
+        return undef;
     }
 
-    return @result;
+
+    if (scalar(@result) == 1)   {       # return the expected line
+        return $result[0];
+    }
+    elsif (scalar(@result) > 1) {       # return all received lines
+        return @result;
+    }
+    else {
+        return undef;                   # no return from git so return undef
+    }
 }
 
 
@@ -519,7 +521,11 @@ sub prepareUserDir() {
 
     # create .fool/<user>/latest if doesn't exist and fill it with 0 otherwise let it untouched
     if (!(-e $userFile)) {
-        writeFile($userFile, ["0", "0.1"]);
+        # usually initial value could be given directly within an array ref, e.g. ["0", "0.1"] but this makes it harder to find this code position if sb. want to change sth.
+        my @initialUserFileContent = ();
+        $initialUserFileContent[$USER_FILE_RESERVED_VALUE] = "reserved line!";
+        $initialUserFileContent[$USER_FILE_MILESTONE]      = "0.1";
+        writeFile($userFile, \@initialUserFileContent);
     }
 }
 
@@ -641,6 +647,28 @@ sub issueElementPosition {
     else {
         return -1;
     }
+}
+
+
+# sets issue value for current user in "git config"
+sub setIssueValue {
+    my ($issueValue) = @_;
+    
+    git("config fool.$userName.id $issueValue");
+}
+
+# returns issue value from current user
+sub getIssueValue {
+    #my $issueValue = git("config --get fool.$userName.id", 1);     # for debugging
+    my $issueValue = git("config --get fool.$userName.id");
+
+    if (!defined($issueValue)) {
+        $issueValue = 0;
+        setIssueValue($issueValue);
+        printf("no issue value found, initialized it with $issueValue!\n\n");
+    }
+    
+    return $issueValue;
 }
 
 # reads a string file into an array
@@ -767,7 +795,7 @@ sub readTaggedFile($) {
 
     my $currenTag = "none";
     foreach my $line (@lines) {
-        CHOMP($line);
+        CHOMP(\$line);
 
         # tag line found?
         if ($line =~ /^(\[[^]]+\])$/) {
@@ -1031,8 +1059,8 @@ sub handleCommandLine {
                     #printf("match ${$patternsRef}{$key}, fill with $1\n");
                     shift(@{$paramsRef});
                     $i--;   # correction because we removed one element from the paramsRef array
-                    #print Dumper $paramsRef;
-                    #print("\n\n");
+                    #printf(Dumper $paramsRef);
+                    #printf("\n\n");
                     $matched = 1;
                 }
                 last;   # finish here in either case... because if we find a parameter a second time it must already be an "arguments pattern"
@@ -1082,14 +1110,13 @@ sub newCmd {  # new [-c|-p] <title>
     testFoolDir();      # check if .fool directory exists (if not init hasn't be called yet!)
     prepareUserDir();   # may be we have to create the user directory if this is the first time current user calls 'new' command
 
-    # reading latest issue value and milestone from user file
-    my @userFileContent = readFile($userFile);
+    # reading milestone from user file
+    my @userFileContent   = readFile($userFile);
+    
+    # get last issue value from "git config"
+    my $currentIssueValue = getIssueValue();
 
-    # checking issue value read from file
-    if ($userFileContent[$USER_FILE_ISSUE_COUNTER] !~ /^\d+$/) {
-        EXIT(255, "$userFile contains invalid latest value!");                                  # @todo: implement autorepair function!?
-    }
-    $userFileContent[$USER_FILE_ISSUE_COUNTER]++; # increment for current issue
+    $currentIssueValue++;  # increment for current issue
 
     # checking milestone read from file
     if (!length($userFileContent[$USER_FILE_MILESTONE])) {
@@ -1102,7 +1129,7 @@ sub newCmd {  # new [-c|-p] <title>
     if ($arguments[0] eq "-c" || $arguments[0] eq "-p") {
         # reading milestrom from user input
         my $newMilestone = inputLine("Milestone [$userFileContent[$USER_FILE_MILESTONE]]: ");     # pressing just [ENTER] doesn't change default milestone
-        normalizeString($newMilestone);     # make a clean string out of it
+        normalizeString(\$newMilestone);     # make a clean string out of it
         if ($newMilestone) {
             $userFileContent[$USER_FILE_MILESTONE] = $newMilestone;
         }
@@ -1122,7 +1149,7 @@ sub newCmd {  # new [-c|-p] <title>
             }
 
             my $newIssueType = inputLine($prompt);
-            CHOMP($newIssueType);
+            CHOMP(\$newIssueType);
             if ($newIssueType =~ /^\d+$/ && $newIssueType >= 0 && $newIssueType < scalar(keys(%ISSUE_TYPES))) {      # valid user input
                 $issueType = $newIssueType;
                 last;
@@ -1148,7 +1175,7 @@ sub newCmd {  # new [-c|-p] <title>
     my $issueTypeText = $ISSUE_TYPES{$issueType};
 
     my $title = join(" ", @arguments);  # create title out of the rest of given arguments
-    normalizeString($title);
+    normalizeString(\$title);
 
     if (!(length($title))) {    # after normalization it's possible that given title is empty, e.g. if sth. like '""""""' was given
         EXIT(255, "title cannot be empty!");
@@ -1173,7 +1200,7 @@ sub newCmd {  # new [-c|-p] <title>
 
     # now write current issue file (with comments and HISTORY)
     addHistory($HISTORY_TOKEN_CREATED, \%tagHash);
-    my ($currentIssueFileName, $currentIssueFile) = getFileName($FILE_NAME_CURRENT_ISSUE, $userFileContent[$USER_FILE_ISSUE_COUNTER]);
+    my ($currentIssueFileName, $currentIssueFile) = getFileName($FILE_NAME_CURRENT_ISSUE, $currentIssueValue);
     writeTaggedFile($currentIssueFile, \%tagHash);
 
     # comment file content has been written into history file so we can delete it now
@@ -1184,11 +1211,11 @@ sub newCmd {  # new [-c|-p] <title>
     # user info
     printf("created issue ".$currentIssueFileName);
 
-    # update .fool/<user>/<email> file
-    writeFile($userFile, \@userFileContent);
+    # store new issue value
+    setIssueValue($currentIssueValue);
 
     # write issue into issues file
-    appendFile($issuesFile, [createIssueEntry(getCurrentIssueTag($userFileContent[$USER_FILE_ISSUE_COUNTER]), $issueTypeText, $ISSUE_STATES{"open"}, $userFileContent[$USER_FILE_MILESTONE], $title)]);
+    appendFile($issuesFile, [createIssueEntry(getCurrentIssueTag($currentIssueValue), $issueTypeText, $ISSUE_STATES{"open"}, $userFileContent[$USER_FILE_MILESTONE], $title)]);
 }
 
 
@@ -1408,27 +1435,27 @@ sub editCmd { # edit [-c|-p] <tag> [<patterns>]
     my $line = $issuesFileContent[$lineIndex];
     if ($line =~ /^([^\/]+)\/([^\/]+)\/([^\/]+)\/([^\/]+)\/([^\/]+)\/([^\/]+)\/(.+)$/) {
         # process with line elements
-        my ($id, $userName, $email, $issueType, $state, $milestone, $title) = ($1, $2, $3, $4, $5, $6, $7);
+        my ($issueNr, $issueUserName, $issueEmail, $issueType, $issueState, $issueMilestone, $issueTitle) = ($1, $2, $3, $4, $5, $6, $7);
 
-        if ($state eq $ISSUE_STATES{"closed"}) {
+        if ($issueState eq $ISSUE_STATES{"closed"}) {
             EXIT(255, "issue is closed, reopen it for editing");
         }
 
         if ($editParts & 0x01) {
             # reading new title from user input
-            my $newTitle = inputLine("Title [$title]: ");    # pressing just [ENTER] doesn't change original title
-            normalizeString($newTitle);
+            my $newTitle = inputLine("Title [$issueTitle]: ");    # pressing just [ENTER] doesn't change original title
+            normalizeString(\$newTitle);
             if (length($newTitle)) {
-                $title = $newTitle;
+                $issueTitle = $newTitle;
                 $issueChanged = 1;
             }
     
             # reading milestone from user input
-            my $newMilestone = inputLine("Milestone [$milestone]: ");     # pressing just [ENTER] doesn't change default milestone
-            CHOMP($newMilestone);
-            normalizeString($newMilestone);
+            my $newMilestone = inputLine("Milestone [$issueMilestone]: ");     # pressing just [ENTER] doesn't change default milestone
+            CHOMP(\$newMilestone);
+            normalizeString(\$newMilestone);
             if ($newMilestone) {
-                $milestone = $newMilestone;
+                $issueMilestone = $newMilestone;
                 $issueChanged = 1;
             }
     
@@ -1471,14 +1498,14 @@ sub editCmd { # edit [-c|-p] <tag> [<patterns>]
     
             # update issues array and write back issues file if necessary
             if ($issueChanged) {
-                $issuesFileContent[$lineIndex] = createIssueEntry(getIssueTag($id, $userName, $email), $ISSUE_TYPES{$issueType}, $state, $milestone, $title);
+                $issuesFileContent[$lineIndex] = createIssueEntry(getIssueTag($issueNr, $issueUserName, $issueEmail), $ISSUE_TYPES{$issueType}, $issueState, $issueMilestone, $issueTitle);
                 writeFile($issuesFile, \@issuesFileContent);
             }
         }
 
         if ($editParts & 0x02) {
             # read tagged file
-            my ($certainIssueFileName, $certainIssueFile) = getFileName($FILE_NAME_CERTAIN_ISSUE, $id, $userName, $email);
+            my ($certainIssueFileName, $certainIssueFile) = getFileName($FILE_NAME_CERTAIN_ISSUE, $issueNr, $issueUserName, $issueEmail);
             my %tagHash = ();
             if ($certainIssueFile && -s $certainIssueFile) {
                 %tagHash = readTaggedFile($certainIssueFile);
@@ -1565,14 +1592,13 @@ sub cpCmd {   # cp [-n] <tag> [<patterns>]
     # prepare user directory if necessary because we need it for the issue's user id
     prepareUserDir();
 
-    # reading latest issue value and milestone from user file
-    my @userFileContent = readFile($userFile);
+    # reading milestone from user file
+    my @userFileContent   = readFile($userFile);
 
-    # checking issue value read from file
-    if ($userFileContent[$USER_FILE_ISSUE_COUNTER] !~ /^\d+$/) {
-        EXIT(255, "$userFile contains invalid latest value!");                                  # @todo: implement autorepair function!?
-    }
-    $userFileContent[$USER_FILE_ISSUE_COUNTER]++; # increment for current issue
+    # get last issue value from "git config"
+    my $currentIssueValue = getIssueValue();
+
+    $currentIssueValue++;  # increment for current issue
 
     # checking milestone read from file
     if (!length($userFileContent[$USER_FILE_MILESTONE])) {
@@ -1588,16 +1614,16 @@ sub cpCmd {   # cp [-n] <tag> [<patterns>]
     my $line = $issuesFileContent[$lineIndex];
     if ($line =~ /^([^\/]+)\/([^\/]+)\/([^\/]+)\/([^\/]+)\/([^\/]+)\/([^\/]+)\/(.+)$/) {
         # process with line elements
-        my ($issueValue, $issueUserName, $issueEmail, $issueType, $state, $issueMilestone, $title) = ($1, $2, $3, $4, $5, $6, $7);
+        my ($issueValue, $issueUserName, $issueEmail, $issueType, $issueState, $issueMilestone, $issueTitle) = ($1, $2, $3, $4, $5, $6, $7);
 
-        # update .fool/<user>/<email> file
-        writeFile($userFile, \@userFileContent);
+        # store new issue value
+        setIssueValue($currentIssueValue);
 
         # write issue into issues file (id, user name, email will be set to current user, state will be set to open and current default milestone will be used!)
-        my $newIssue = createIssueEntry(getIssueTag($userFileContent[$USER_FILE_ISSUE_COUNTER], $userName, $email), $issueType, $ISSUE_STATES{"open"}, $userFileContent[$USER_FILE_MILESTONE], $title);
+        my $newIssue = createIssueEntry(getIssueTag($currentIssueValue, $userName, $email), $issueType, $ISSUE_STATES{"open"}, $userFileContent[$USER_FILE_MILESTONE], $issueTitle);
         appendFile($issuesFile, [$newIssue]);
 
-        printf("to... ".(getShortIssueTag($userFileContent[$USER_FILE_ISSUE_COUNTER], $userName))."\n\n");
+        printf("to... ".(getShortIssueTag($currentIssueValue, $userName))."\n\n");
 
         # read history file from original issue
         my ($certainIssueFileName, $certainIssueFile) = getFileName($FILE_NAME_CERTAIN_ISSUE, $issueValue, $issueUserName, $issueEmail);
@@ -1614,19 +1640,17 @@ sub cpCmd {   # cp [-n] <tag> [<patterns>]
         addHistory($HISTORY_TOKEN_COPIED, \%tagHash, "from ".getIssueTag($issueValue, $issueUserName, $issueEmail));
 
         # write history file of new issue
-        my ($currentIssueFileName, $currentIssueFile) = getFileName($FILE_NAME_CURRENT_ISSUE, $userFileContent[$USER_FILE_ISSUE_COUNTER]);
+        my ($currentIssueFileName, $currentIssueFile) = getFileName($FILE_NAME_CURRENT_ISSUE, $currentIssueValue);
         writeTaggedFile($currentIssueFile, \%tagHash);
 
         if ($autoEdit) {
-            editCmd("-c", getIssueTag($userFileContent[$USER_FILE_ISSUE_COUNTER], $userName, $email));  # edit comment only
+            editCmd("-c", getIssueTag($currentIssueValue, $userName, $email));  # edit comment only
         }
     }
     else {
         EXIT(255, "found damaged line in issue file: [$line]");                                 # @todo: implement autorepair function!?
     }
 }
-
-
 
 
 # move existing issue
@@ -1683,14 +1707,13 @@ sub mvCmd {   # mv [-n] <tag> [<patterns>]
     # prepare user directory if necessary because we need it for the issue's user id
     prepareUserDir();
 
-    # reading latest issue value and milestone from user file
+    # reading milestone from user file
     my @userFileContent = readFile($userFile);
+    
+    # get last issue value from "git config"
+    my $currentIssueValue = getIssueValue();
 
-    # checking issue value read from file
-    if ($userFileContent[$USER_FILE_ISSUE_COUNTER] !~ /^\d+$/) {
-        EXIT(255, "$userFile contains invalid latest value!");                                  # @todo: implement autorepair function!?
-    }
-    $userFileContent[$USER_FILE_ISSUE_COUNTER]++; # increment for current issue
+    $currentIssueValue++;  # increment for current issue
 
     # checking milestone read from file
     if (!length($userFileContent[$USER_FILE_MILESTONE])) {
@@ -1706,10 +1729,10 @@ sub mvCmd {   # mv [-n] <tag> [<patterns>]
     my $line = $issuesFileContent[$lineIndex];
     if ($line =~ /^([^\/]+)\/([^\/]+)\/([^\/]+)\/([^\/]+)\/([^\/]+)\/([^\/]+)\/(.+)$/) {
         # process with line elements
-        my ($issueValue, $issueUserName, $issueEmail, $issueType, $state, $issueMilestone, $title) = ($1, $2, $3, $4, $5, $6, $7);
+        my ($issueValue, $issueUserName, $issueEmail, $issueType, $issueState, $issueMilestone, $issueTitle) = ($1, $2, $3, $4, $5, $6, $7);
 
         # check if issue is in open state
-        if ($state eq $ISSUE_STATES{"closed"}) {
+        if ($issueState eq $ISSUE_STATES{"closed"}) {
             EXIT(255, "issue already closed, used cp command instead");
         }
 
@@ -1719,17 +1742,17 @@ sub mvCmd {   # mv [-n] <tag> [<patterns>]
         }
 
         # set issue into closed state and write issues file back
-        $issuesFileContent[$lineIndex] = createIssueEntry(getIssueTag($issueValue, $issueUserName, $issueEmail), $issueType, $ISSUE_STATES{"closed"}, $issueMilestone, $title);
+        $issuesFileContent[$lineIndex] = createIssueEntry(getIssueTag($issueValue, $issueUserName, $issueEmail), $issueType, $ISSUE_STATES{"closed"}, $issueMilestone, $issueTitle);
         writeFile($issuesFile, \@issuesFileContent);
 
-        # update .fool/<user>/<email> file
-        writeFile($userFile, \@userFileContent);
+        # store new issue value
+        setIssueValue($currentIssueValue);
 
         # write new issue into issues file (id, user name, email will be set to current user, state will be set to open and current default milestone will be used!)
-        my $newIssue = createIssueEntry(getIssueTag($userFileContent[$USER_FILE_ISSUE_COUNTER], $userName, $email), $issueType, $ISSUE_STATES{"open"}, $userFileContent[$USER_FILE_MILESTONE], $title);
+        my $newIssue = createIssueEntry(getIssueTag($currentIssueValue, $userName, $email), $issueType, $ISSUE_STATES{"open"}, $userFileContent[$USER_FILE_MILESTONE], $issueTitle);
         appendFile($issuesFile, [$newIssue]);
 
-        printf("to... ".(getShortIssueTag($userFileContent[$USER_FILE_ISSUE_COUNTER], $userName))."\n\n");
+        printf("to... ".(getShortIssueTag($currentIssueValue, $userName))."\n\n");
 
         # read history file from original issue
         my ($certainIssueFileName, $certainIssueFile) = getFileName($FILE_NAME_CERTAIN_ISSUE, $issueValue, $issueUserName, $issueEmail);
@@ -1740,8 +1763,8 @@ sub mvCmd {   # mv [-n] <tag> [<patterns>]
         else {
             EXIT(255, "copied but no comment/history file found: $certainIssueFile");           # @todo: implement autorepair function!?
         }
-        addHistory($HISTORY_TOKEN_MOVEDTO, \%tagHash, "to ".getIssueTag($userFileContent[$USER_FILE_ISSUE_COUNTER], $userName, $email));
-        addHistory($HISTORY_TOKEN_CLOSED,  \%tagHash, "original state was \"$ISSUE_STATES_HISTORY_ENTRY_MATCH{$state}\"");
+        addHistory($HISTORY_TOKEN_MOVEDTO, \%tagHash, "to ".getIssueTag($currentIssueValue, $userName, $email));
+        addHistory($HISTORY_TOKEN_CLOSED,  \%tagHash, "original state was \"$issueState\"");
         writeTaggedFile($certainIssueFile, \%tagHash);
 
         # replace original [HISTORY] section
@@ -1749,11 +1772,11 @@ sub mvCmd {   # mv [-n] <tag> [<patterns>]
         addHistory($HISTORY_TOKEN_MOVEDFROM, \%tagHash, "from ".getIssueTag($issueValue, $issueUserName, $issueEmail));
 
         # write history file of new issue
-        my ($currentIssueFileName, $currentIssueFile) = getFileName($FILE_NAME_CURRENT_ISSUE, $userFileContent[$USER_FILE_ISSUE_COUNTER]);
+        my ($currentIssueFileName, $currentIssueFile) = getFileName($FILE_NAME_CURRENT_ISSUE, $currentIssueValue);
         writeTaggedFile($currentIssueFile, \%tagHash);
 
         if ($autoEdit) {
-            editCmd("-c", getIssueTag($userFileContent[$USER_FILE_ISSUE_COUNTER], $userName, $email));  # edit comment only
+            editCmd("-c", getIssueTag($currentIssueValue, $userName, $email));  # edit comment only
         }
     }
     else {
@@ -1823,28 +1846,28 @@ sub stateCmd {    # state [-n] <state> <patterns>
     my $line = $issuesFileContent[$lineIndex];
     if ($line =~ /^([^\/]+)\/([^\/]+)\/([^\/]+)\/([^\/]+)\/([^\/]+)\/([^\/]+)\/(.+)$/) {
         # process with line elements
-        my ($id, $userName, $email, $issueType, $state, $milestone, $title) = ($1, $2, $3, $4, $5, $6, $7);
+        my ($issueNr, $issueUserName, $issueEmail, $issueType, $issueState, $issueMilestone, $issueTitle) = ($1, $2, $3, $4, $5, $6, $7);
 
         # check if issue is in open state
-        if ($state eq $ISSUE_STATES{$newState}) {
+        if ($issueState eq $ISSUE_STATES{$newState}) {
             EXIT(255, "issue already in state $newState");
         }
 
         # if we close an issue we must edit it before, if not we will edit it after state change because if it is already closed we have to open it first!
         if ($ISSUE_STATES{$newState} eq $ISSUE_STATES{"closed"} && $autoEdit) {
-            editCmd("-c", getIssueTag($id, $userName, $email));  # edit comment only
+            editCmd("-c", getIssueTag($issueNr, $issueUserName, $issueEmail));  # edit comment only
         }
 
         # set issue into new state
-        $issuesFileContent[$lineIndex] = createIssueEntry(getIssueTag($id, $userName, $email), $issueType, $ISSUE_STATES{$newState}, $milestone, $title);
+        $issuesFileContent[$lineIndex] = createIssueEntry(getIssueTag($issueNr, $issueUserName, $issueEmail), $issueType, $ISSUE_STATES{$newState}, $issueMilestone, $issueTitle);
         writeFile($issuesFile, \@issuesFileContent);
 
-        printf("change state from $state to $ISSUE_STATES{$newState}...\n");
+        printf("change state from $issueState to $ISSUE_STATES{$newState}...\n");
         printIssue($issuesFileContent[$lineIndex], 0, 1);
         printf("\n");
 
         # read tagged file
-        my ($certainIssueFileName, $certainIssueFile) = getFileName($FILE_NAME_CERTAIN_ISSUE, $id, $userName, $email);
+        my ($certainIssueFileName, $certainIssueFile) = getFileName($FILE_NAME_CERTAIN_ISSUE, $issueNr, $issueUserName, $issueEmail);
         my %tagHash = ();
         if ($certainIssueFile && -s $certainIssueFile) {
             %tagHash = readTaggedFile($certainIssueFile);
@@ -1857,20 +1880,20 @@ sub stateCmd {    # state [-n] <state> <patterns>
         my $historyTag;
 
         if ($ISSUE_STATES_HISTORY_ENTRY_MATCH{$newState}) {
-            addHistory($ISSUE_STATES_HISTORY_ENTRY_MATCH{$newState}, \%tagHash, "original state was \"$ISSUE_STATES_HISTORY_ENTRY_MATCH{$state}\"");
+            addHistory($ISSUE_STATES_HISTORY_ENTRY_MATCH{$newState}, \%tagHash, "original state was \"$issueState\"");
         }
         else {
-            addHistory($HISTORY_TOKEN_UNKNOWN, \%tagHash, "original state was \"$ISSUE_STATES_HISTORY_ENTRY_MATCH{$state}\"");
+            addHistory($HISTORY_TOKEN_UNKNOWN, \%tagHash, "original state was \"$issueState\"");
             # @todo: error handling here because there is no token for the new state?
         }
         writeTaggedFile($certainIssueFile, \%tagHash);
         if (!$ISSUE_STATES_HISTORY_ENTRY_MATCH{$newState}) {
-            EXIT(254, "bug in git-fool, expand %ISSUE_STATES_HISTORY_ENTRY_MATCH!");
+            EXIT(254, "bug in git-fool, expand \%ISSUE_STATES_HISTORY_ENTRY_MATCH!");
         }
 
         # if new state is not "closed" we edit it here because it could be closed in have been reopened...
         if ($ISSUE_STATES{$newState} ne $ISSUE_STATES{"closed"} && $autoEdit) {
-            editCmd("-c", getIssueTag($id, $userName, $email));  # edit comment only
+            editCmd("-c", getIssueTag($issueNr, $issueUserName, $issueEmail));  # edit comment only
         }
     }
     else {
@@ -1987,10 +2010,10 @@ sub rmCmd {   # rm <tag> [<patterns>]
     my $line = $issuesFileContent[$lineIndex];
     if ($line =~ /^([^\/]+)\/([^\/]+)\/([^\/]+)\/([^\/]+)\/([^\/]+)\/([^\/]+)\/(.+)$/) {
         # process with line elements
-        my ($id, $userName, $email, $issueType, $state, $milestone, $title) = ($1, $2, $3, $4, $5, $6, $7);
+        my ($issueNr, $issueUserName, $issueEmail, $issueType, $issueState, $issueMilestone, $issueTitle) = ($1, $2, $3, $4, $5, $6, $7);
 
         # read tagged file
-        my ($certainIssueFileName, $certainIssueFile) = getFileName($FILE_NAME_CERTAIN_ISSUE, $id, $userName, $email);
+        my ($certainIssueFileName, $certainIssueFile) = getFileName($FILE_NAME_CERTAIN_ISSUE, $issueNr, $issueUserName, $issueEmail);
         my %tagHash = ();
         if ($certainIssueFile && -s $certainIssueFile) {
             %tagHash = readTaggedFile($certainIssueFile);
@@ -2035,13 +2058,11 @@ sub milestoneCmd {   # milestone [<mlst> [<pattern>]]
     prepareUserName(1);
     prepareCheckout(1);
 
-    # reading latest issue value and milestone from user file
+    # reading milestone from user file
     my @userFileContent = readFile($userFile);
-
-    # checking issue value read from file
-    if ($userFileContent[$USER_FILE_ISSUE_COUNTER] !~ /^\d+$/) {
-        EXIT(255, "$userFile contains invalid latest value!");                                  # @todo: implement autorepair function!?
-    }
+    
+    # get last issue value from "git config"
+    my $currentIssueValue = getIssueValue();
 
     # checking milestone read from file
     if (!length($userFileContent[$USER_FILE_MILESTONE])) {
@@ -2058,7 +2079,7 @@ sub milestoneCmd {   # milestone [<mlst> [<pattern>]]
         return;
     }
     my $newMilestone = shift(@arguments);
-    normalizeString($newMilestone);
+    normalizeString(\$newMilestone);
 
     # new milestone valid?
     if (!length($newMilestone)) {
@@ -2270,10 +2291,10 @@ sub dosth {
     print ref($ref)."\n";
     
     if (ref($ref) eq "ARRAY") {
-        print("got array\n");
+        printf("got array\n");
     }
     if (ref($ref) eq "SCALAR") {
-        print("got scalar\n");
+        printf("got scalar\n");
     }
 }
 
