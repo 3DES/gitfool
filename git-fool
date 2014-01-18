@@ -901,9 +901,9 @@ sub printIssue($$$) {
     # issue line has to be printed
     if ($line =~ /^([^\/]+)\/([^\/]+)\/([^\/]+)\/([^\/]+)\/([^\/]+)\/([^\/]+)\/(.+)$/) {
         # process with line elements
-        my ($issueNr, $issueUserName, $issueEmail, $issueType, $issueState, $issueMilestone, $issueTitle) = ($1, $2, $3, $4, $5, $6, $7);
-        my $shortIssueTag = getShortIssueTag($issueNr, $issueUserName);
-        my $issueTag      = getIssueTag($issueNr, $issueUserName, $issueEmail);
+        my ($issueValue, $issueUserName, $issueEmail, $issueType, $issueState, $issueMilestone, $issueTitle) = ($1, $2, $3, $4, $5, $6, $7);
+        my $shortIssueTag = getShortIssueTag($issueValue, $issueUserName);
+        my $issueTag      = getIssueTag($issueValue, $issueUserName, $issueEmail);
 
         # print long version
         if ($printSize == 2) {  # 0=short, 1=medium, 2=long
@@ -920,7 +920,7 @@ sub printIssue($$$) {
                    "MILESTONE : %s\n\n", $issueTag, $issueTitle, $issueType, $issueState, $issueMilestone);
 
             # now try to print the comment&HISTORY file
-            my $certainIssueFile   = getFileName($FILE_NAME_CERTAIN_ISSUE, $issueNr, $issueUserName, $issueEmail);
+            my $certainIssueFile   = getFileName($FILE_NAME_CERTAIN_ISSUE, $issueValue, $issueUserName, $issueEmail);
             if ($certainIssueFile && -s $certainIssueFile) {
                 my @commentHistoryFile = readFile($certainIssueFile);
                 foreach my $line (@commentHistoryFile) {
@@ -1435,7 +1435,7 @@ sub editCmd { # edit [-c|-p] <tag> [<patterns>]
     my $line = $issuesFileContent[$lineIndex];
     if ($line =~ /^([^\/]+)\/([^\/]+)\/([^\/]+)\/([^\/]+)\/([^\/]+)\/([^\/]+)\/(.+)$/) {
         # process with line elements
-        my ($issueNr, $issueUserName, $issueEmail, $issueType, $issueState, $issueMilestone, $issueTitle) = ($1, $2, $3, $4, $5, $6, $7);
+        my ($issueValue, $issueUserName, $issueEmail, $issueType, $issueState, $issueMilestone, $issueTitle) = ($1, $2, $3, $4, $5, $6, $7);
 
         if ($issueState eq $ISSUE_STATES{"closed"}) {
             EXIT(255, "issue is closed, reopen it for editing");
@@ -1498,14 +1498,14 @@ sub editCmd { # edit [-c|-p] <tag> [<patterns>]
     
             # update issues array and write back issues file if necessary
             if ($issueChanged) {
-                $issuesFileContent[$lineIndex] = createIssueEntry(getIssueTag($issueNr, $issueUserName, $issueEmail), $ISSUE_TYPES{$issueType}, $issueState, $issueMilestone, $issueTitle);
+                $issuesFileContent[$lineIndex] = createIssueEntry(getIssueTag($issueValue, $issueUserName, $issueEmail), $ISSUE_TYPES{$issueType}, $issueState, $issueMilestone, $issueTitle);
                 writeFile($issuesFile, \@issuesFileContent);
             }
         }
 
         if ($editParts & 0x02) {
             # read tagged file
-            my ($certainIssueFileName, $certainIssueFile) = getFileName($FILE_NAME_CERTAIN_ISSUE, $issueNr, $issueUserName, $issueEmail);
+            my ($certainIssueFileName, $certainIssueFile) = getFileName($FILE_NAME_CERTAIN_ISSUE, $issueValue, $issueUserName, $issueEmail);
             my %tagHash = ();
             if ($certainIssueFile && -s $certainIssueFile) {
                 %tagHash = readTaggedFile($certainIssueFile);
@@ -1846,7 +1846,7 @@ sub stateCmd {    # state [-n] <state> <patterns>
     my $line = $issuesFileContent[$lineIndex];
     if ($line =~ /^([^\/]+)\/([^\/]+)\/([^\/]+)\/([^\/]+)\/([^\/]+)\/([^\/]+)\/(.+)$/) {
         # process with line elements
-        my ($issueNr, $issueUserName, $issueEmail, $issueType, $issueState, $issueMilestone, $issueTitle) = ($1, $2, $3, $4, $5, $6, $7);
+        my ($issueValue, $issueUserName, $issueEmail, $issueType, $issueState, $issueMilestone, $issueTitle) = ($1, $2, $3, $4, $5, $6, $7);
 
         # check if issue is in open state
         if ($issueState eq $ISSUE_STATES{$newState}) {
@@ -1855,11 +1855,11 @@ sub stateCmd {    # state [-n] <state> <patterns>
 
         # if we close an issue we must edit it before, if not we will edit it after state change because if it is already closed we have to open it first!
         if ($ISSUE_STATES{$newState} eq $ISSUE_STATES{"closed"} && $autoEdit) {
-            editCmd("-c", getIssueTag($issueNr, $issueUserName, $issueEmail));  # edit comment only
+            editCmd("-c", getIssueTag($issueValue, $issueUserName, $issueEmail));  # edit comment only
         }
 
         # set issue into new state
-        $issuesFileContent[$lineIndex] = createIssueEntry(getIssueTag($issueNr, $issueUserName, $issueEmail), $issueType, $ISSUE_STATES{$newState}, $issueMilestone, $issueTitle);
+        $issuesFileContent[$lineIndex] = createIssueEntry(getIssueTag($issueValue, $issueUserName, $issueEmail), $issueType, $ISSUE_STATES{$newState}, $issueMilestone, $issueTitle);
         writeFile($issuesFile, \@issuesFileContent);
 
         printf("change state from $issueState to $ISSUE_STATES{$newState}...\n");
@@ -1867,7 +1867,7 @@ sub stateCmd {    # state [-n] <state> <patterns>
         printf("\n");
 
         # read tagged file
-        my ($certainIssueFileName, $certainIssueFile) = getFileName($FILE_NAME_CERTAIN_ISSUE, $issueNr, $issueUserName, $issueEmail);
+        my ($certainIssueFileName, $certainIssueFile) = getFileName($FILE_NAME_CERTAIN_ISSUE, $issueValue, $issueUserName, $issueEmail);
         my %tagHash = ();
         if ($certainIssueFile && -s $certainIssueFile) {
             %tagHash = readTaggedFile($certainIssueFile);
@@ -1893,7 +1893,7 @@ sub stateCmd {    # state [-n] <state> <patterns>
 
         # if new state is not "closed" we edit it here because it could be closed in have been reopened...
         if ($ISSUE_STATES{$newState} ne $ISSUE_STATES{"closed"} && $autoEdit) {
-            editCmd("-c", getIssueTag($issueNr, $issueUserName, $issueEmail));  # edit comment only
+            editCmd("-c", getIssueTag($issueValue, $issueUserName, $issueEmail));  # edit comment only
         }
     }
     else {
@@ -2010,10 +2010,10 @@ sub rmCmd {   # rm <tag> [<patterns>]
     my $line = $issuesFileContent[$lineIndex];
     if ($line =~ /^([^\/]+)\/([^\/]+)\/([^\/]+)\/([^\/]+)\/([^\/]+)\/([^\/]+)\/(.+)$/) {
         # process with line elements
-        my ($issueNr, $issueUserName, $issueEmail, $issueType, $issueState, $issueMilestone, $issueTitle) = ($1, $2, $3, $4, $5, $6, $7);
+        my ($issueValue, $issueUserName, $issueEmail, $issueType, $issueState, $issueMilestone, $issueTitle) = ($1, $2, $3, $4, $5, $6, $7);
 
         # read tagged file
-        my ($certainIssueFileName, $certainIssueFile) = getFileName($FILE_NAME_CERTAIN_ISSUE, $issueNr, $issueUserName, $issueEmail);
+        my ($certainIssueFileName, $certainIssueFile) = getFileName($FILE_NAME_CERTAIN_ISSUE, $issueValue, $issueUserName, $issueEmail);
         my %tagHash = ();
         if ($certainIssueFile && -s $certainIssueFile) {
             %tagHash = readTaggedFile($certainIssueFile);
@@ -2133,7 +2133,7 @@ sub milestoneCmd {   # milestone [<mlst> [<pattern>]]
 
         if ($line =~ /^([^\/]+)\/([^\/]+)\/([^\/]+)\/([^\/]+)\/([^\/]+)\/([^\/]+)\/(.+)$/) {
             # process with line elements
-            my ($issueNr, $issueUserName, $issueEmail, $issueType, $issueState, $issueMilestone, $issueTitle) = ($1, $2, $3, $4, $5, $6, $7);
+            my ($issueValue, $issueUserName, $issueEmail, $issueType, $issueState, $issueMilestone, $issueTitle) = ($1, $2, $3, $4, $5, $6, $7);
 
             # check if issue is not closed because closed ones won't be changed
             if ($issueState eq $ISSUE_STATES{"closed"} || $newMilestone eq $issueMilestone) {
@@ -2146,14 +2146,14 @@ sub milestoneCmd {   # milestone [<mlst> [<pattern>]]
             }
 
             # change issue's milestone
-            $issuesFileContent[$lineIndex] = createIssueEntry(getIssueTag($issueNr, $issueUserName, $issueEmail), $issueType, $issueState, $newMilestone, $issueTitle);
+            $issuesFileContent[$lineIndex] = createIssueEntry(getIssueTag($issueValue, $issueUserName, $issueEmail), $issueType, $issueState, $newMilestone, $issueTitle);
 
             # print changed issue to screen
             printIssue($issuesFileContent[$lineIndex], 0, !$issueChanged);
             $issueChanged = 1;
 
             # read HISTORY file
-            my ($certainIssueFileName, $certainIssueFile) = getFileName($FILE_NAME_CERTAIN_ISSUE, $issueNr, $issueUserName, $issueEmail);
+            my ($certainIssueFileName, $certainIssueFile) = getFileName($FILE_NAME_CERTAIN_ISSUE, $issueValue, $issueUserName, $issueEmail);
             my %tagHash = ();
             if ($certainIssueFile && -s $certainIssueFile) {
                 %tagHash = readTaggedFile($certainIssueFile);
