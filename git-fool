@@ -1482,7 +1482,7 @@ sub editCmd { # edit [-c|-p] <tag> [<patterns>]
                 }
     
                 my $newIssueType = inputLine($prompt);
-                CHOMP($newIssueType);
+                CHOMP(\$newIssueType);
                 if ($newIssueType =~ /^\d+$/ && $newIssueType >= 0 && $newIssueType < scalar(keys(%ISSUE_TYPES))) {      # valid user input
                     $issueType = $newIssueType;
                     $issueChanged = 1;

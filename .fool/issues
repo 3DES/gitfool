@@ -12,7 +12,8 @@
 12/3DES/git@74th.de/Task/open/0.3/refactoring so that issue line becomes more flexible
 13/3DES/git@74th.de/Task/open/0.x/we need priority support as separate issue line entry
 14/3DES/git@74th.de/Task/closed/0.3/new command 'mv' that moves the issue to another person, the responsible one
-15/3DES/git@74th.de/Task/open/0.3/'git fool new' inside a new empty repository shows unwanted error messages because git-fool tries to determine current checkout
+15/3DES/git@74th.de/Task/closed/0.3/'git fool new' inside a new empty repository shows unwanted error messages because git-fool tries to determine current checkout
 16/3DES/git@74th.de/Task/open/0.3/issues file should get a version identifyer in first line to see if it compatible with current version and e.g. to give an update script the possibility to update an old issue file version to make it useable with a newer version of git-fool
 17/3DES/git@74th.de/Bug/open/0.x/if unknown state is given to stateCmd HISTORY_TOKEN_UNKNOWN is used but maybe we should do some error handling here
-18/3DES/git@74th.de/Bug/open/0.3/issues have to be uniqe for each project but this doesn't work with versionized issue numbers
+18/3DES/git@74th.de/Bug/closed/0.3/issues have to be uniqe for each project but this doesn't work with versionized issue numbers
+19/3DES/git@74th.de/Task/closed/0.3/bug within edit command, CHOMP called without a reference

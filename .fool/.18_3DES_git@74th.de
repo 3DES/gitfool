@@ -7,7 +7,14 @@ milestone should be handled within user file because usually with several branch
 works on different versions, e.g. next milestone and current service pack or several service packs at the same time
 and so he/she would always have to change default milestone.
 
+
+issue number moved to 'git config'
+milestone still inside user file
+first line of user file (was issue number presiously) is reserved now
+
 [HISTORY]
 CREATED:     UTC, Jan 17 22:00:56 2014 -by- 3DES/git@74th.de -at- 5ada6bdd10d9535e80f442d021e26e1bc9800725
 CHANGED:     UTC, Jan 17 22:05:42 2014 -by- 3DES/git@74th.de -at- 5ada6bdd10d9535e80f442d021e26e1bc9800725
+CHANGED:     UTC, Jan 18 01:01:45 2014 -by- 3DES/git@74th.de -at- d64f1c8956ff0e55b7c5ae5286eb619f1981092d
+CLOSED:      UTC, Jan 18 01:01:45 2014 -by- 3DES/git@74th.de -at- d64f1c8956ff0e55b7c5ae5286eb619f1981092d - original state was "open"
 
