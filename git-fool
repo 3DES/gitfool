@@ -106,12 +106,13 @@ my %HISTORY_TOKENS = ( $HISTORY_TOKEN_CREATED    =>  "CREATED:     ",   # usuall
 # defined issue types
 my $ISSUE_TYPE_TASK     = 0;
 my $ISSUE_TYPE_BUG      = 1;
+my $ISSUE_TYPE_NOTE     = 2;
 my $ISSUE_TYPE_DEFAULT  = $ISSUE_TYPE_TASK;
 # no duplicated issues here and no gaps between the issues!!!
 my %ISSUE_TYPES = ( $ISSUE_TYPE_TASK    => "Task",
                     $ISSUE_TYPE_BUG     => "Bug",
+                    $ISSUE_TYPE_NOTE    => "Note",
                   );
-my $ISSUE_TYPES_LENGTH = 4+2;       # means length("[Task]") = 4+2
 
 
 # define states
