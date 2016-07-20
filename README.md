@@ -1,5 +1,5 @@
-git-fool (c) 2014 Manfred Hauser - git@74th.de
-==============================================
+git-fool (c) 2014 Manfred Hauser - git (at) 74th (dot) de
+=========================================================
 
 a lightweight distributed multi-user bug and issue tracker for git
 
